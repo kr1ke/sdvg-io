@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="sdvg.io — минималистичный трекер задач: эпики, спринты, проекты. Работает офлайн." />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="sdvg.io" />
+    <meta name="theme-color" content="#fbfaf6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141418" media="(prefers-color-scheme: dark)" />
+    <title>sdvg.io</title>
+    <script>
+      // Дефолт — светлая. Системное prefers-color-scheme намеренно не используем:
+      // приложение должно стартовать в одной и той же теме у всех пользователей,
+      // переключение — явное действие через top-right cluster.
+      try {
+        var raw = localStorage.getItem("tracker-v6");
+        var t = null;
+        if (raw) {
+          var d = JSON.parse(raw);
+          if (d && d.ui && d.ui.theme) t = d.ui.theme;
+        }
+        document.documentElement.setAttribute("data-theme", t || "light");
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    </script>
+    <style>
+      :root {
+        --bg:        oklch(98.6% 0.004 80);
+        --panel:     oklch(100%  0     0);
+        --surface:   oklch(96.5% 0.005 80);
+        --surface-2: oklch(94%   0.006 80);
+        --line:      oklch(91%   0.007 80);
+        --line-2:    oklch(85%   0.008 80);
+
+        --fg:   oklch(22% 0.012 80);
+        --fg-2: oklch(42% 0.012 80);
+        --fg-3: oklch(56% 0.012 80);
+        --fg-4: oklch(72% 0.010 80);
+        --fg-5: oklch(85% 0.008 80);
+
+        --accent:     oklch(54% 0.16 145);
+        --accent-ink: oklch(99% 0    0);
+
+        --pill-bg:     oklch(95% 0.04 270);
+        --pill-border: oklch(80% 0.10 270);
+        --pill-fg:     oklch(46% 0.18 270);
+
+        --active-bg: oklch(22% 0.012 80);
+        --active-fg: oklch(98.6% 0.004 80);
+
+        --danger:      oklch(55% 0.17 25);
+        --danger-soft: oklch(70% 0.09 25);
+
+        --overlay:      rgba(28, 25, 20, 0.42);
+        --menu-shadow:  0 2px 14px rgba(28, 25, 20, 0.08);
+        --modal-shadow: 0 8px 32px rgba(28, 25, 20, 0.12);
+
+        --body-weight: 400;
+
+        /* +28px top на мобиле — clearance для floating utility cluster */
+        --pad: 50px 14px calc(56px + env(safe-area-inset-bottom));
+        --sprint-pad: 11px 12px;
+        --modal-pad: 18px 14px;
+        --modal-w: 100%;
+
+        --fast: 120ms;
+        --med: 200ms;
+        --slow: 280ms;
+        --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+        --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+        --ease-out-expo:  cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      [data-theme="dark"] {
+        --bg:        oklch(16% 0.008 250);
+        --panel:     oklch(20% 0.010 250);
+        --surface:   oklch(19% 0.009 250);
+        --surface-2: oklch(23% 0.011 250);
+        --line:      oklch(28% 0.012 250);
+        --line-2:    oklch(34% 0.013 250);
+
+        --fg:   oklch(93% 0.006 250);
+        --fg-2: oklch(72% 0.008 250);
+        --fg-3: oklch(56% 0.010 250);
+        --fg-4: oklch(40% 0.011 250);
+        --fg-5: oklch(30% 0.012 250);
+
+        --accent:     oklch(72% 0.16 145);
+        --accent-ink: oklch(14% 0.008 250);
+
+        --pill-bg:     oklch(22% 0.05 270);
+        --pill-border: oklch(38% 0.10 270);
+        --pill-fg:     oklch(78% 0.13 270);
+
+        --active-bg: oklch(93% 0.006 250);
+        --active-fg: oklch(16% 0.008 250);
+
+        --danger:      oklch(72% 0.15 25);
+        --danger-soft: oklch(48% 0.08 25);
+
+        --overlay:      rgba(0, 0, 0, 0.62);
+        --menu-shadow:  0 2px 14px rgba(0, 0, 0, 0.45);
+        --modal-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+
+        --body-weight: 360;
+      }
+
+      @media (min-width: 561px) {
+        :root {
+          --pad: 40px 24px 80px;
+          --sprint-pad: 12px 16px;
+          --modal-pad: 24px;
+          --modal-w: 480px;
+        }
+      }
+
+      *, *::before, *::after { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+      }
+
+      body {
+        font-family: "SF Mono", "Menlo", "Consolas", ui-monospace, monospace;
+        font-weight: var(--body-weight);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+        transition: background var(--med) var(--ease-out-quart),
+                    color var(--med) var(--ease-out-quart);
+      }
+
+      button {
+        background: none; border: 0; padding: 0; cursor: pointer;
+        font: inherit; color: inherit;
+        transition: color var(--fast) var(--ease-out-quart),
+                    background var(--fast) var(--ease-out-quart),
+                    border-color var(--fast) var(--ease-out-quart),
+                    opacity var(--fast) var(--ease-out-quart),
+                    transform var(--fast) var(--ease-out-quart);
+      }
+
+      @media (hover: hover) and (pointer: fine) {
+        button:active:not(:disabled) { transform: scale(0.96); }
+      }
+      @media (pointer: coarse) {
+        button:active:not(:disabled) { transform: scale(0.94); }
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--pill-fg);
+        outline-offset: 2px;
+        border-radius: 3px;
+      }
+
+      input, textarea {
+        background: transparent;
+        color: inherit;
+        caret-color: var(--accent);
+      }
+      input::placeholder, textarea::placeholder { color: var(--fg-4); }
+
+      ::selection { background: var(--pill-bg); color: var(--fg); }
+
+      /* Inline styles in App.jsx use `all: unset` to reset; we use !important
+         here so class wins over inline reset without rippling through React. */
+      .icon-btn {
+        padding: 5px 7px !important;
+        margin: -5px 0 !important;
+        border-radius: 4px !important;
+        line-height: 1 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        cursor: pointer !important;
+      }
+      @media (hover: hover) {
+        .icon-btn:hover { background: var(--surface) !important; color: var(--fg-2) !important; }
+      }
+      /* WCAG AA минимум 24×24, AAA — 44×44. Берём середину 36×36:
+         комфортно для пальца, но не разрушает плотность YouTrack-style рядов. */
+      @media (pointer: coarse) {
+        .icon-btn {
+          min-width: 36px !important;
+          min-height: 36px !important;
+          padding: 6px !important;
+          margin: -4px -2px !important;
+        }
+      }
+
+      .pill-row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+        margin: 0 -2px 28px;
+        padding: 4px 2px;
+        scroll-snap-type: x proximity;
+        -webkit-overflow-scrolling: touch;
+      }
+      .pill-row::-webkit-scrollbar { display: none; }
+      .pill-row > * { flex: 0 0 auto; scroll-snap-align: start; }
+
+      @keyframes fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      @keyframes slide-up {
+        from { opacity: 0; transform: translateY(8px) scale(0.99); }
+        to   { opacity: 1; transform: translateY(0)   scale(1); }
+      }
+      @keyframes menu-in {
+        from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+        to   { opacity: 1; transform: translateY(0)    scale(1); }
+      }
+      @keyframes row-in {
+        from { opacity: 0; transform: translateY(-2px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes cb-pulse {
+        0%   { transform: scale(0.85); }
+        55%  { transform: scale(1.12); }
+        100% { transform: scale(1); }
+      }
+      @keyframes sheet-up {
+        from { opacity: 0; transform: translateY(100%); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .anim-sheet {
+        animation: sheet-up 320ms var(--ease-out-quint);
+        will-change: transform, opacity;
+      }
+
+      .anim-overlay { animation: fade-in var(--med) var(--ease-out-quart); }
+      .anim-box {
+        animation: slide-up 280ms var(--ease-out-quint);
+        will-change: transform, opacity;
+      }
+      .anim-menu {
+        animation: menu-in 160ms var(--ease-out-quint);
+        transform-origin: top right;
+      }
+      .anim-row { animation: row-in 180ms var(--ease-out-quart); }
+      .cb-pulse { animation: cb-pulse 280ms var(--ease-out-quint); }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+        .anim-overlay, .anim-box, .anim-menu, .anim-row {
+          animation: fade-in 160ms var(--ease-out-quart) !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

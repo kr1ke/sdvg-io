@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.*
+.vscode/
+.idea/
+
+# Claude Code infrastructure
+.claude/
+
+# Случайные артефакты разработки (скриншоты, симлинки, старые копии)
+image.png
+task-tracker.jsx
+telegram-cloud-photo-*.jpg

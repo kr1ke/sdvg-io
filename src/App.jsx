@@ -1,0 +1,1335 @@
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+
+const KEY = "tracker-v6";
+const uid = () => Math.random().toString(36).slice(2, 9);
+const now = () => Date.now();
+
+const LOCALE = { en: "en-US", ru: "ru-RU" };
+
+const fmt = (ts, lang = "en") => {
+  const d = new Date(ts);
+  const loc = LOCALE[lang] || LOCALE.en;
+  return d.toLocaleDateString(loc, { day: "numeric", month: "short" }) +
+    " " + d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit" });
+};
+
+const REL = {
+  en: { now: "now", m: "m", h: "h", d: "d", w: "w", mo: "mo" },
+  ru: { now: "сейчас", m: "м", h: "ч", d: "д", w: "н", mo: "мес" },
+};
+const rel = (ts, lang = "en") => {
+  const r = REL[lang] || REL.en;
+  const diff = Date.now() - ts;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return r.now;
+  if (m < 60) return m + r.m;
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + r.h;
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + r.d;
+  const w = Math.floor(d / 7);
+  if (w < 5) return w + r.w;
+  const mo = Math.floor(d / 30);
+  return mo + r.mo;
+};
+
+/* ── i18n dictionary ──
+   Keys = English source. Lookup: T[lang][key] || T.en[key] || key. */
+const T = {
+  en: {
+    epics: "Epics", sprints: "Sprints", archive: "Archive", tasks: "Tasks", projects: "Projects",
+    all: "All", noProject: "No project", none: "none", manageProjects: "manage projects",
+    addTask: "+ task", addSprint: "+ add sprint", addProject: "+ add project",
+    newest: "newest", oldest: "oldest",
+    open: "open", openCard: "open card", archiveAction: "archive", archiveTask: "archive task", archiveSprintAction: "archive sprint",
+    settings: "settings", deleteForever: "delete forever", restore: "restore",
+    moveToSprint: "move to sprint", moveToSprintLabel: "Move to sprint",
+    cancel: "cancel", save: "save", done: "done", doneFooter: "done",
+    newEpic: "new epic", newTask: "new task", projectName: "project name",
+    untitled: "untitled", sprint: "sprint",
+    sprintSettings: "Sprint settings", name: "Name", goal: "Goal", description: "Description",
+    epicName: "Epic name", linkedTasks: (n) => `Linked tasks (${n})`, noTasksLinked: "no tasks linked",
+    epic: "Epic", project: "Project",
+    notesPlaceholder: "notes, links, details...",
+    contextPlaceholder: "context, notes, scope...",
+    sprintGoalPlaceholder: "what should this sprint achieve?",
+    selectPlaceholder: "— select —",
+    noTasksInProject: "no tasks in this project",
+    noEpicsInProject: "no epics in this project",
+    empty: "empty",
+    noProjectsHint: "no projects yet — use projects to split work across contexts",
+    deleteProjectHint: "deleting a project just unlinks its epics & tasks — nothing is lost.",
+    resetTitle: "Reset everything?",
+    resetWarn: "This deletes all epics, sprints, tasks, projects, and the archive. There is no undo.",
+    resetTypeHint: (kw) => ["Type ", kw, " to confirm."],
+    resetPlaceholder: "type reset",
+    reset: "reset",
+    created: "created", ago: "ago",
+    nTasks: (n) => `${n} ${n === 1 ? "task" : "tasks"}`,
+    archivedSuffix: "archived",
+    weekN: (n) => `Week ${n}`, projectN: (n) => `Project ${n}`,
+    backlog: "Backlog",
+    switchTo: (which) => `switch to ${which}`,
+    light: "light", dark: "dark", english: "English", russian: "Russian",
+  },
+  ru: {
+    epics: "Эпики", sprints: "Спринты", archive: "Архив", tasks: "Задачи", projects: "Проекты",
+    all: "Все", noProject: "Без проекта", none: "нет", manageProjects: "управление проектами",
+    addTask: "+ задача", addSprint: "+ добавить спринт", addProject: "+ добавить проект",
+    newest: "новые", oldest: "старые",
+    open: "открыть", openCard: "открыть", archiveAction: "архив", archiveTask: "в архив", archiveSprintAction: "архив спринта",
+    settings: "настройки", deleteForever: "удалить навсегда", restore: "восстановить",
+    moveToSprint: "перенести", moveToSprintLabel: "Перенести в спринт",
+    cancel: "отмена", save: "сохранить", done: "готово", doneFooter: "готово",
+    newEpic: "новый эпик", newTask: "новая задача", projectName: "имя проекта",
+    untitled: "без названия", sprint: "спринт",
+    sprintSettings: "Настройки спринта", name: "Название", goal: "Цель", description: "Описание",
+    epicName: "Название эпика", linkedTasks: (n) => `Связанные задачи (${n})`, noTasksLinked: "нет связанных задач",
+    epic: "Эпик", project: "Проект",
+    notesPlaceholder: "заметки, ссылки, детали...",
+    contextPlaceholder: "контекст, заметки, объём...",
+    sprintGoalPlaceholder: "чего должен достичь спринт?",
+    selectPlaceholder: "— выбрать —",
+    noTasksInProject: "нет задач в этом проекте",
+    noEpicsInProject: "нет эпиков в этом проекте",
+    empty: "пусто",
+    noProjectsHint: "проектов пока нет — используйте проекты чтобы разделить работу по контекстам",
+    deleteProjectHint: "удаление проекта просто отвязывает его эпики и задачи — ничего не теряется.",
+    resetTitle: "Сбросить всё?",
+    resetWarn: "Это удалит все эпики, спринты, задачи, проекты и архив. Отмены не будет.",
+    resetTypeHint: (kw) => ["Напечатайте ", kw, " чтобы подтвердить."],
+    resetPlaceholder: "напечатайте reset",
+    reset: "сброс",
+    created: "создано", ago: "назад",
+    nTasks: (n) => `${n} ${n === 1 ? "задача" : (n >= 2 && n <= 4 ? "задачи" : "задач")}`,
+    archivedSuffix: "архивирован",
+    weekN: (n) => `Неделя ${n}`, projectN: (n) => `Проект ${n}`,
+    backlog: "Бэклог",
+    switchTo: (which) => `переключить на ${which}`,
+    light: "светлую", dark: "тёмную", english: "English", russian: "Русский",
+  },
+};
+const tFn = (lang) => (key, ...args) => {
+  const v = (T[lang] && T[lang][key]) ?? T.en[key] ?? key;
+  return typeof v === "function" ? v(...args) : v;
+};
+
+const mkTask = (text = "", projectId = null) => ({
+  id: uid(), text, desc: "", epicId: null, projectId, done: false, createdAt: now(),
+});
+const mkEpic = (projectId = null) => ({ id: uid(), text: "", projectId, createdAt: now() });
+const mkSprint = (n) => ({ id: uid(), name: `Week ${n}`, goal: "", desc: "", tasks: [], createdAt: now() });
+const mkProject = (name) => ({ id: uid(), name });
+
+const empty = {
+  epics: [],
+  sprints: [],
+  projects: [],
+  archiveTasks: [],
+  archiveSprints: [],
+  archiveEpics: [],
+  activeProject: null,
+  sort: { epics: "desc", sprints: "desc" },
+  ui: { archiveOpen: false, archiveSprintExp: {}, theme: "light", lang: "ru" },
+  sc: 1,
+  pc: 1,
+  // Маркер: пользователь явно нажал reset (или это пост-reset state).
+  // Без маркера и пустых массивов — считаем "коррапт" и пере-seed'им.
+  wasReset: false,
+};
+
+const isEssentiallyEmpty = (d) =>
+  d &&
+  (d.epics?.length || 0) === 0 &&
+  (d.sprints?.length || 0) === 0 &&
+  (d.projects?.length || 0) === 0 &&
+  (d.archiveTasks?.length || 0) === 0 &&
+  (d.archiveSprints?.length || 0) === 0 &&
+  (d.archiveEpics?.length || 0) === 0;
+
+/* Seed-данные первого запуска: уже наработанная картина, не "пустой Hello World".
+   Названия и сроки на русском, реалистичные домены — выглядит как живой трекер. */
+const seedDemo = () => {
+  const N = Date.now();
+  const D = (days, hours = 0) => N - days * 86400000 - hours * 3600000;
+  const pPersonal = "p_personal", pWork = "p_work", pStudy = "p_study";
+  const eRefactor = "e_refactor", eRelease = "e_release", eCourse = "e_course";
+  return {
+    // Тот же приём: для desc-display массив идёт от старого к новому.
+    epics: [
+      { id: eRefactor, text: "Рефакторинг auth-флоу", projectId: pWork, createdAt: D(12) },
+      { id: eRelease, text: "Подготовка релиза v2", projectId: pWork, createdAt: D(6) },
+      { id: eCourse, text: "Курс по системному дизайну", projectId: pStudy, createdAt: D(3) },
+    ],
+    // Порядок намеренно "снизу вверх": sortArr с desc делает .reverse(),
+    // и при desc-отображении пользователь видит Эта неделя → Следующая → Бэклог.
+    sprints: [
+      { id: "s_back", name: "Бэклог", goal: "Идеи и задачи без срока", desc: "", createdAt: D(20), tasks: [
+        { id: "t10", text: "Прочитать «Designing Data-Intensive Applications»", desc: "", epicId: eCourse, projectId: pStudy, done: false, createdAt: D(20) },
+        { id: "t11", text: "Перевести pet-проект на TypeScript", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(15) },
+      ]},
+      { id: "s_next", name: "Следующая неделя", goal: "", desc: "", createdAt: D(1), tasks: [
+        { id: "t7", text: "Презентация архитектуры на ревью команды", desc: "", epicId: eRelease, projectId: pWork, done: false, createdAt: D(1) },
+        { id: "t8", text: "Разобрать backlog багов из Sentry", desc: "приоритизировать P0/P1", epicId: null, projectId: pWork, done: false, createdAt: D(1) },
+        { id: "t9", text: "Записаться к стоматологу", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(1) },
+      ]},
+      { id: "s_this", name: "Эта неделя", goal: "Закрыть критичные для релиза задачи", desc: "", createdAt: D(2), tasks: [
+        { id: "t1", text: "Починить race condition в обновлении токена", desc: "", epicId: eRefactor, projectId: pWork, done: true,  createdAt: D(2, 4) },
+        { id: "t2", text: "Накатить миграцию users.email_verified", desc: "", epicId: eRelease, projectId: pWork, done: true,  createdAt: D(2, 2) },
+        { id: "t3", text: "Code review PR #428 (новый rate-limiter)", desc: "", epicId: null, projectId: pWork, done: false, createdAt: D(1, 6) },
+        { id: "t4", text: "Дописать раздел про consensus-протоколы", desc: "Raft + Paxos\nдомашка к лекции 4", epicId: eCourse, projectId: pStudy, done: false, createdAt: D(1, 2) },
+        { id: "t5", text: "Заказать продукты на неделю", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(0, 8) },
+        { id: "t6", text: "Обновить резюме под новую вакансию", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(0, 3) },
+      ]},
+    ],
+    projects: [
+      { id: pWork, name: "Работа" },
+      { id: pPersonal, name: "Личное" },
+      { id: pStudy, name: "Учёба" },
+    ],
+    archiveTasks: [
+      { id: "ta1", text: "Хотфикс: фикс отображения статуса в админке", desc: "", epicId: null, projectId: pWork, done: true, createdAt: D(8), archivedAt: D(7) },
+      { id: "ta2", text: "Купить билеты в отпуск", desc: "", epicId: null, projectId: pPersonal, done: true, createdAt: D(15), archivedAt: D(10) },
+    ],
+    archiveSprints: [
+      { id: "sa1", name: "Прошлая неделя", goal: "Завершить онбординг", desc: "", createdAt: D(14), archivedAt: D(7), tasks: [
+        { id: "ta_s1", text: "Настроить локальное окружение", desc: "", epicId: null, projectId: pWork, done: true, createdAt: D(14) },
+        { id: "ta_s2", text: "Прочитать internal docs", desc: "", epicId: null, projectId: pWork, done: true, createdAt: D(13) },
+      ]},
+    ],
+    archiveEpics: [],
+    activeProject: null,
+    sort: { epics: "desc", sprints: "desc" },
+    ui: { archiveOpen: false, archiveSprintExp: {}, theme: "light", lang: "ru" },
+    sc: 4, pc: 4,
+  };
+};
+
+const migrate = (raw) => {
+  if (!raw) return empty;
+  return {
+    ...empty,
+    ...raw,
+    sort: { ...empty.sort, ...(raw.sort || {}) },
+    ui: { ...empty.ui, ...(raw.ui || {}) },
+    projects: raw.projects || [],
+    epics: (raw.epics || []).map(e => ({ projectId: null, createdAt: 0, ...e })),
+    sprints: (raw.sprints || []).map(s => ({ createdAt: 0, ...s, tasks: (s.tasks || []).map(t => ({ projectId: null, ...t })) })),
+    archiveEpics: (raw.archiveEpics || []).map(e => ({ projectId: null, ...e })),
+    archiveTasks: (raw.archiveTasks || []).map(t => ({ projectId: null, ...t })),
+  };
+};
+
+function useStore() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get(KEY);
+        const stored = r ? migrate(JSON.parse(r.value)) : null;
+        // Условие seed'а: либо ключа нет (первый запуск), либо данные есть, но они
+        // полностью пусты И не было явного reset'а — значит мы потеряли данные
+        // (новый ключ, корраптнутый storage, и т.п.). Reset кладёт wasReset:true,
+        // что блокирует авто-seed и оставляет настоящий empty state.
+        if (!stored || (isEssentiallyEmpty(stored) && !stored.wasReset)) {
+          const seed = seedDemo();
+          setData(seed);
+          await window.storage.set(KEY, JSON.stringify(seed));
+        } else {
+          setData(stored);
+        }
+      } catch {
+        setData(empty);
+      }
+      setLoading(false);
+    })();
+  }, []);
+  const save = useCallback(async (n) => {
+    setData(n);
+    try { await window.storage.set(KEY, JSON.stringify(n)); } catch {}
+  }, []);
+  return { data, loading, save };
+}
+
+function useNarrow(threshold = 600) {
+  const [narrow, setNarrow] = useState(typeof window !== "undefined" && window.innerWidth < threshold);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < threshold);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [threshold]);
+  return narrow;
+}
+
+/* ── Inline editable text ── */
+function Inline({ value, onSave, placeholder, style: s = {} }) {
+  const [ed, setEd] = useState(false);
+  const [t, setT] = useState(value);
+  const r = useRef(null);
+  useEffect(() => setT(value), [value]);
+  useEffect(() => { if (ed && r.current) r.current.focus(); }, [ed]);
+  if (!ed) return (
+    <span onClick={() => setEd(true)} style={{ cursor: "text", ...s }}>
+      {value || <span style={{ color: "var(--fg-3)", fontStyle: "italic" }}>{placeholder}</span>}
+    </span>
+  );
+  const commit = () => { setEd(false); if (t.trim() !== value) onSave(t.trim()); };
+  return (
+    <input
+      ref={r} value={t}
+      onChange={e => setT(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setT(value); setEd(false); } }}
+      placeholder={placeholder}
+      style={{ all: "unset", width: "100%", font: "inherit", color: "inherit", borderBottom: "1.5px solid var(--fg-3)", ...s }}
+    />
+  );
+}
+
+/* ── Custom Select ── */
+function Select({ value, onChange, options, placeholder = "—", disabled = false }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const current = options.find(o => o.value === value);
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => !disabled && setOpen(o => !o)}
+        disabled={disabled}
+        style={{
+          all: "unset", display: "block", width: "100%", boxSizing: "border-box",
+          padding: "8px 10px", fontSize: 13, color: "var(--fg)", cursor: disabled ? "default" : "pointer",
+          background: disabled ? "var(--surface)" : "var(--panel)",
+          border: "1px solid var(--line)", borderRadius: 4, fontFamily: "inherit",
+          opacity: disabled ? 0.7 : 1,
+          transition: "border-color var(--fast) ease-out, background var(--fast) ease-out",
+        }}
+      >
+        <span>{current ? current.label : <span style={{ color: "var(--fg-3)" }}>{placeholder}</span>}</span>
+        <span style={{ float: "right", color: "var(--fg-3)", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="anim-menu" style={{
+          position: "absolute", top: "calc(100% + 2px)", left: 0, right: 0, zIndex: 20,
+          background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 4,
+          maxHeight: 200, overflowY: "auto", boxShadow: "var(--menu-shadow)",
+        }}>
+          {options.map(o => (
+            <button
+              key={o.value}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+              style={{
+                all: "unset", display: "block", width: "100%", boxSizing: "border-box",
+                padding: "8px 10px", fontSize: 13, fontFamily: "inherit",
+                color: o.value === value ? "var(--fg)" : "var(--fg-2)", cursor: "pointer",
+                background: o.value === value ? "var(--surface-2)" : "transparent",
+              }}
+              onMouseEnter={e => { if (o.value !== value) e.currentTarget.style.background = "var(--surface)"; }}
+              onMouseLeave={e => { if (o.value !== value) e.currentTarget.style.background = "transparent"; }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Checkbox ── */
+function Checkbox({ checked, onChange, size = 16 }) {
+  const prev = useRef(checked);
+  const [pulse, setPulse] = useState(false);
+  useEffect(() => {
+    if (!prev.current && checked) { setPulse(true); const t = setTimeout(() => setPulse(false), 300); return () => clearTimeout(t); }
+    prev.current = checked;
+  }, [checked]);
+  return (
+    <button
+      onClick={onChange}
+      role="checkbox"
+      aria-checked={checked}
+      className={pulse ? "cb-pulse" : undefined}
+      style={{
+        all: "unset", boxSizing: "border-box",
+        width: size, height: size, flexShrink: 0,
+        border: `1.5px solid ${checked ? "var(--accent)" : "var(--line-2)"}`,
+        borderRadius: 3,
+        background: checked ? "var(--accent)" : "transparent",
+        cursor: "pointer", display: "inline-flex",
+        alignItems: "center", justifyContent: "center",
+        transition: "background var(--fast) ease-out, border-color var(--fast) ease-out",
+      }}
+    >
+      {checked && <span style={{ color: "var(--accent-ink)", fontSize: 11, fontWeight: 800, lineHeight: 1 }}>✓</span>}
+    </button>
+  );
+}
+
+/* ── Pill (project / epic tag) ── */
+function Pill({ children, color = "project" }) {
+  const palette = {
+    project: { border: "var(--pill-border)", text: "var(--pill-fg)", bg: "transparent" },
+    epic: { border: "transparent", text: "var(--fg-3)", bg: "transparent" },
+  }[color];
+  return (
+    <span style={{
+      display: "inline-block",
+      fontSize: 10, fontFamily: "inherit",
+      border: `1px solid ${palette.border}`,
+      color: palette.text,
+      background: palette.bg,
+      padding: color === "project" ? "1px 6px" : 0,
+      borderRadius: 3,
+      whiteSpace: "nowrap",
+      lineHeight: 1.4,
+    }}>{children}</span>
+  );
+}
+
+/* ── Overflow menu ── */
+function OverflowMenu({ items }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button onClick={() => setOpen(o => !o)} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 16, lineHeight: 1 }}>…</button>
+      {open && (
+        <div className="anim-menu" style={O.dd}>
+          {items.map((it, i) => (
+            <button key={i} onClick={() => { it.onClick(); setOpen(false); }}
+              style={{ ...B, display: "block", padding: "8px 12px", fontSize: 12, color: it.danger ? "var(--danger)" : "var(--fg)", width: "100%", textAlign: "left" }}>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Hooks to resolve tasks/epics across the dataset ── */
+function useAllTasks(data, t) {
+  return useMemo(() => {
+    if (!data) return [];
+    const tasks = [];
+    data.sprints.forEach(s => s.tasks.forEach(tk => tasks.push({ ...tk, _loc: s.name })));
+    data.archiveTasks.forEach(tk => tasks.push({ ...tk, _loc: t ? t("archive") : "Archive" }));
+    data.archiveSprints.forEach(s => s.tasks.forEach(tk => tasks.push({ ...tk, _loc: `${s.name} (${t ? t("archivedSuffix") : "archived"})` })));
+    return tasks;
+  }, [data, t]);
+}
+function useAllEpics(data) {
+  return useMemo(() => data ? [...data.epics, ...data.archiveEpics] : [], [data]);
+}
+const matchesProject = (item, active) => {
+  if (active == null) return true;
+  if (active === "none") return !item.projectId;
+  return item.projectId === active;
+};
+const sortArr = (arr, dir) => dir === "desc" ? [...arr].slice().reverse() : arr;
+
+/* ── Sheet wrapper.
+   Desktop: centered modal (current behaviour, anim-box slide-up).
+   Mobile: bottom sheet — full width, top-rounded, slides up from bottom.
+   Both close on overlay click. */
+function Sheet({ children, onClose }) {
+  const narrow = useNarrow();
+  const bg = narrow ? {
+    position: "fixed", inset: 0, background: "var(--overlay)",
+    display: "flex", alignItems: "flex-end", justifyContent: "center",
+    zIndex: 100,
+  } : O.bg;
+  const box = narrow ? {
+    background: "var(--panel)", color: "var(--fg)",
+    borderRadius: "14px 14px 0 0",
+    padding: "var(--modal-pad)",
+    paddingBottom: "calc(var(--modal-pad) + env(safe-area-inset-bottom))",
+    width: "100%", maxHeight: "88vh", overflow: "auto",
+    boxShadow: "var(--modal-shadow)",
+    fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
+    border: "1px solid var(--line)", borderBottom: 0,
+  } : O.box;
+  return (
+    <div className="anim-overlay" style={bg} onClick={onClose}>
+      <div className={narrow ? "anim-sheet" : "anim-box"} style={box} onClick={e => e.stopPropagation()}>
+        {/* Drag handle visual hint on mobile */}
+        {narrow && (
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+            <div style={{ width: 36, height: 4, borderRadius: 2, background: "var(--line-2)" }} />
+          </div>
+        )}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ── Task Modal ── */
+function TaskModal({ task, allEpics, projects, sprints, onUpdate, onClose, onMove, readOnly = false, t, lang }) {
+  const [desc, setDesc] = useState(task.desc || "");
+  const [epicId, setEpicId] = useState(task.epicId || "");
+  const [projectId, setProjectId] = useState(task.projectId || "");
+  const save = () => {
+    if (!readOnly) onUpdate({ ...task, desc, epicId: epicId || null, projectId: projectId || null });
+    onClose();
+  };
+  const epicOpts = [{ value: "", label: t("none") }, ...allEpics.map(e => ({ value: e.id, label: e.text || t("untitled") }))];
+  const projOpts = [{ value: "", label: t("noProject") }, ...projects.map(p => ({ value: p.id, label: p.name }))];
+  const sprintOpts = sprints.map(s => ({ value: s.id, label: s.name }));
+  return (
+    <Sheet onClose={onClose}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 6, gap: 8 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)", flex: 1, minWidth: 0, lineHeight: 1.35, wordBreak: "break-word" }}>
+            {task.text || t("untitled")}
+            {task.done && <span style={{ fontSize: 11, color: "var(--accent)", marginLeft: 8, fontWeight: 500 }}>{t("done")}</span>}
+          </div>
+          <button onClick={onClose} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18, flexShrink: 0 }}>×</button>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 20, fontStyle: "italic" }}>
+          {t("created")} {fmt(task.createdAt, lang)} · {rel(task.createdAt, lang)} {t("ago")}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+          <div>
+            <label style={O.label}>{t("epic")}</label>
+            <Select value={epicId} onChange={setEpicId} options={epicOpts} disabled={readOnly} />
+          </div>
+          <div>
+            <label style={O.label}>{t("project")}</label>
+            <Select value={projectId} onChange={setProjectId} options={projOpts} disabled={readOnly} />
+          </div>
+        </div>
+
+        {!readOnly && onMove && sprintOpts.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <label style={O.label}>{t("moveToSprintLabel")}</label>
+            <Select value="" onChange={(id) => { if (id) { onMove(id); onClose(); } }} options={[{value:"", label: t("selectPlaceholder")}, ...sprintOpts]} />
+          </div>
+        )}
+
+        <label style={O.label}>{t("description")}</label>
+        <textarea readOnly={readOnly} value={desc} onChange={e => setDesc(e.target.value)}
+          placeholder={t("notesPlaceholder")} rows={7} style={O.textarea} />
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
+          <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          {!readOnly && <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
+        </div>
+    </Sheet>
+  );
+}
+
+/* ── Sprint Modal ── */
+function SprintModal({ sprint, onUpdate, onClose, t }) {
+  const [name, setName] = useState(sprint.name || "");
+  const [goal, setGoal] = useState(sprint.goal || "");
+  const [desc, setDesc] = useState(sprint.desc || "");
+  const save = () => { onUpdate({ ...sprint, name, goal, desc }); onClose(); };
+  return (
+    <Sheet onClose={onClose}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)" }}>{t("sprintSettings")}</div>
+          <button onClick={onClose} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18 }}>×</button>
+        </div>
+        <label style={O.label}>{t("name")}</label>
+        <input value={name} onChange={e => setName(e.target.value)}
+          style={{ all: "unset", font: "inherit", fontSize: 14, width: "100%", borderBottom: "1.5px solid var(--fg-3)", color: "var(--fg)", marginBottom: 14, paddingBottom: 2, boxSizing: "border-box" }} />
+        <label style={O.label}>{t("goal")}</label>
+        <input value={goal} onChange={e => setGoal(e.target.value)} placeholder={t("sprintGoalPlaceholder")}
+          style={{ all: "unset", font: "inherit", fontSize: 13, width: "100%", borderBottom: "1.5px solid var(--fg-4)", color: "var(--fg)", marginBottom: 14, paddingBottom: 2, boxSizing: "border-box", fontStyle: goal ? "normal" : "italic" }} />
+        <label style={O.label}>{t("description")}</label>
+        <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder={t("contextPlaceholder")} rows={5} style={O.textarea} />
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
+          <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>
+        </div>
+    </Sheet>
+  );
+}
+
+/* ── Epic Modal ── */
+function EpicModal({ epic, allTasks, projects, onUpdate, onClose, onOpenTask, readOnly = false, t }) {
+  const [text, setText] = useState(epic.text || "");
+  const [projectId, setProjectId] = useState(epic.projectId || "");
+  const linked = allTasks.filter(x => x.epicId === epic.id);
+  const save = () => { if (!readOnly) onUpdate({ ...epic, text, projectId: projectId || null }); onClose(); };
+  const projOpts = [{ value: "", label: t("noProject") }, ...projects.map(p => ({ value: p.id, label: p.name }))];
+  return (
+    <Sheet onClose={onClose}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16, gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <label style={O.label}>{t("epicName")}</label>
+            {readOnly
+              ? <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)", wordBreak: "break-word" }}>{epic.text}</div>
+              : <input autoFocus={!epic.text} value={text} onChange={e => setText(e.target.value)}
+                  style={{ all: "unset", font: "inherit", fontSize: 16, fontWeight: 700, width: "100%", borderBottom: "1.5px solid var(--fg-3)", color: "var(--fg)" }} />
+            }
+          </div>
+          <button onClick={onClose} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18, flexShrink: 0 }}>×</button>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={O.label}>{t("project")}</label>
+          <Select value={projectId} onChange={setProjectId} options={projOpts} disabled={readOnly} />
+        </div>
+
+        <label style={O.label}>{t("linkedTasks", linked.length)}</label>
+        {linked.length === 0 && <div style={{ color: "var(--fg-4)", fontSize: 13, marginTop: 4 }}>{t("noTasksLinked")}</div>}
+        {linked.map(x => (
+          <div key={x.id} onClick={() => onOpenTask(x)}
+            style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "5px 0", cursor: "pointer", fontSize: 13, color: x.done ? "var(--fg-3)" : "var(--fg)" }}>
+            <span style={{ color: "var(--fg-4)" }}>–</span>
+            <span style={x.done ? { textDecoration: "line-through", flex: 1 } : { flex: 1 }}>{x.text || t("untitled")}</span>
+            <span style={{ fontSize: 10, color: "var(--fg-3)", fontStyle: "italic" }}>{x._loc}</span>
+            {x.done && <span style={{ fontSize: 10, color: "var(--accent)" }}>{t("done")}</span>}
+          </div>
+        ))}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 22 }}>
+          <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          {!readOnly && <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
+        </div>
+    </Sheet>
+  );
+}
+
+/* ── Projects Modal ── */
+function ProjectsModal({ projects, onAdd, onRename, onDelete, onClose, t }) {
+  return (
+    <Sheet onClose={onClose}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)" }}>{t("projects")}</div>
+          <button onClick={onClose} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18 }}>×</button>
+        </div>
+        {projects.length === 0 && (
+          <div style={{ color: "var(--fg-3)", fontSize: 13, marginBottom: 14, fontStyle: "italic" }}>
+            {t("noProjectsHint")}
+          </div>
+        )}
+        {projects.map(p => (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
+            <span style={{ color: "var(--fg-4)" }}>–</span>
+            <div style={{ flex: 1 }}>
+              <Inline value={p.name} onSave={name => onRename(p.id, name)} placeholder={t("projectName")} />
+            </div>
+            <button onClick={() => onDelete(p.id)} title="delete project" className="icon-btn" style={{ ...B, color: "var(--fg-4)", fontSize: 13 }}>×</button>
+          </div>
+        ))}
+        <button onClick={onAdd} style={ADD}>{t("addProject")}</button>
+        <div style={{ fontSize: 11, color: "var(--fg-3)", marginTop: 18, lineHeight: 1.5 }}>
+          {t("deleteProjectHint")}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 14 }}>
+          <button onClick={onClose} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("doneFooter")}</button>
+        </div>
+    </Sheet>
+  );
+}
+
+/* ── Reset confirm modal ── */
+function ResetModal({ onConfirm, onClose, t }) {
+  const [val, setVal] = useState("");
+  const r = useRef(null);
+  useEffect(() => { if (r.current) r.current.focus(); }, []);
+  // Keyword stays English: it's a security pattern, not a translatable label.
+  const KW = "reset";
+  const ok = val.trim().toLowerCase() === KW;
+  const hint = t("resetTypeHint", KW);
+  return (
+    <Sheet onClose={onClose}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>{t("resetTitle")}</div>
+        <div style={{ fontSize: 13, color: "var(--fg-2)", marginBottom: 18, lineHeight: 1.5 }}>
+          {t("resetWarn")}{" "}
+          {hint[0]}<span style={{ color: "var(--danger)", fontWeight: 700 }}>{hint[1]}</span>{hint[2]}
+        </div>
+        <input ref={r} value={val} onChange={e => setVal(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && ok) onConfirm(); if (e.key === "Escape") onClose(); }}
+          placeholder={t("resetPlaceholder")}
+          style={{ all: "unset", font: "inherit", fontSize: 14, width: "100%", padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 4, boxSizing: "border-box", color: "var(--fg)", background: "var(--bg)" }} />
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
+          <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          <button onClick={ok ? onConfirm : undefined} disabled={!ok}
+            style={{ ...B, color: ok ? "var(--danger)" : "var(--fg-4)", fontSize: 13, fontWeight: 700, cursor: ok ? "pointer" : "default", padding: "8px 4px" }}>
+            {KW}
+          </button>
+        </div>
+    </Sheet>
+  );
+}
+
+/* ── Project filter bar ── */
+function FilterBar({ projects, active, onSelect, onOpenProjects, t }) {
+  const items = [
+    { key: null, label: t("all") },
+    ...projects.map(p => ({ key: p.id, label: p.name })),
+    ...(projects.length > 0 ? [{ key: "none", label: t("noProject") }] : []),
+  ];
+  return (
+    <div className="pill-row">
+      {items.map(it => {
+        const on = active === it.key;
+        return (
+          <button key={String(it.key)} onClick={() => onSelect(it.key)} style={{
+            all: "unset", cursor: "pointer", fontFamily: "inherit", fontSize: 12,
+            padding: "7px 13px", borderRadius: 14, whiteSpace: "nowrap",
+            border: on ? "1px solid var(--active-bg)" : "1px solid var(--line)",
+            background: on ? "var(--active-bg)" : "var(--panel)",
+            color: on ? "var(--active-fg)" : "var(--fg-2)",
+            transition: "background var(--fast) ease-out, color var(--fast) ease-out, border-color var(--fast) ease-out",
+          }}>{it.label}</button>
+        );
+      })}
+      <button onClick={onOpenProjects} title={t("manageProjects")} className="icon-btn"
+        style={{ ...B, color: "var(--fg-3)", fontSize: 14, marginLeft: 2 }}>⚙</button>
+    </div>
+  );
+}
+
+/* ── Sort toggle ── */
+function SortToggle({ dir, onToggle, t }) {
+  return (
+    <button onClick={onToggle} style={{ ...B, color: "var(--fg-3)", fontSize: 11, fontWeight: 400, marginLeft: 8 }}>
+      {dir === "desc" ? `↓ ${t("newest")}` : `↑ ${t("oldest")}`}
+    </button>
+  );
+}
+
+/* ── Task Row ── */
+function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDone, moveTargets = [], onMove, onOpen, narrow, t, lang }) {
+  const [showMove, setShowMove] = useState(false);
+  const moveRef = useRef(null);
+  useEffect(() => {
+    if (!showMove) return;
+    const onDoc = (e) => { if (moveRef.current && !moveRef.current.contains(e.target)) setShowMove(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [showMove]);
+  const ep = allEpics.find(e => e.id === task.epicId);
+  const pr = projects.find(p => p.id === task.projectId);
+
+  const actions = narrow ? (
+    <OverflowMenu items={[
+      ...(moveTargets.length > 0 ? moveTargets.map(m => ({ label: `→ ${m.label}`, onClick: () => onMove(task.id, m.key) })) : []),
+      { label: t("open"), onClick: () => onOpen(task) },
+      { label: t("archiveAction"), onClick: () => onSoftDelete(task.id), danger: true },
+    ]} />
+  ) : (
+    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+      {moveTargets.length > 0 && (
+        <div ref={moveRef} style={{ position: "relative" }}>
+          <button onClick={() => setShowMove(!showMove)} title={t("moveToSprint")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>→</button>
+          {showMove && (
+            <div className="anim-menu" style={O.dd}>
+              {moveTargets.map(mt => (
+                <button key={mt.key} onClick={() => { onMove(task.id, mt.key); setShowMove(false); }}
+                  style={{ ...B, display: "block", padding: "8px 12px", fontSize: 12, color: "var(--fg)", width: "100%", textAlign: "left" }}>
+                  {mt.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <button onClick={() => onOpen(task)} title={t("openCard")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
+      <button onClick={() => onSoftDelete(task.id)} title={t("archiveTask")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
+    </div>
+  );
+
+  // Mobile: title row + meta row (pill / epic / age) below.
+  // Desktop: single dense row preserving the YouTrack-style rhythm.
+  if (narrow) {
+    const hasMeta = ep || pr;
+    return (
+      <div style={{
+        display: "flex", alignItems: "flex-start", gap: 8,
+        marginBottom: 4, padding: "4px 0",
+        opacity: task.done ? 0.55 : 1,
+      }}>
+        <div style={{ paddingTop: 3 }}>
+          <Checkbox checked={task.done} onChange={() => onToggleDone(task.id)} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            ...(task.done ? { textDecoration: "line-through", color: "var(--fg-3)" } : {}),
+            overflow: "hidden", textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}>
+            <Inline value={task.text} onSave={txt => onUpdate({ ...task, text: txt })} placeholder={t("newTask")}
+              style={task.done ? { color: "var(--fg-3)" } : {}} />
+          </div>
+          {hasMeta && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 11, color: "var(--fg-3)" }}>
+              {pr && <Pill>{pr.name}</Pill>}
+              {ep && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>#{ep.text}</span>}
+              <span style={{ flex: 1 }} />
+              <span style={{ fontStyle: "italic", color: "var(--fg-4)" }}>{rel(task.createdAt, lang)}</span>
+            </div>
+          )}
+          {!hasMeta && (
+            <div style={{ marginTop: 1, fontSize: 11, color: "var(--fg-4)", fontStyle: "italic" }}>{rel(task.createdAt, lang)}</div>
+          )}
+        </div>
+        <div style={{ paddingTop: 1 }}>{actions}</div>
+      </div>
+    );
+  }
+
+  // Desktop: title первой строкой, pill+#epic ВСЕГДА отдельной ниже.
+  // Без inline-wrap'а — это давало "скачущие" высоты строк между задачами.
+  const hasMeta = ep || pr;
+  return (
+    <div style={{
+      display: "flex", alignItems: "flex-start", gap: 8,
+      paddingTop: 3, marginBottom: 2,
+      opacity: task.done ? 0.55 : 1,
+    }}>
+      <div style={{ paddingTop: 4, flexShrink: 0 }}>
+        <Checkbox checked={task.done} onChange={() => onToggleDone(task.id)} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={task.done ? { textDecoration: "line-through", color: "var(--fg-3)" } : {}}>
+          <Inline value={task.text} onSave={txt => onUpdate({ ...task, text: txt })} placeholder={t("newTask")}
+            style={task.done ? { color: "var(--fg-3)" } : {}} />
+        </div>
+        {hasMeta && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 11, color: "var(--fg-3)" }}>
+            {pr && <Pill>{pr.name}</Pill>}
+            {ep && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>#{ep.text}</span>}
+          </div>
+        )}
+      </div>
+      <span style={{ fontSize: 10, color: "var(--fg-4)", fontStyle: "italic", marginRight: 2, paddingTop: 5, flexShrink: 0 }}>{rel(task.createdAt, lang)}</span>
+      <div style={{ paddingTop: 1, flexShrink: 0 }}>{actions}</div>
+    </div>
+  );
+}
+
+/* ── Archive View ── */
+function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreTask, restoreSprint, restoreEpic, t, lang }) {
+  const narrow = useNarrow();
+  const toggle = id => u({ ui: { ...data.ui, archiveSprintExp: { ...data.ui.archiveSprintExp, [id]: !data.ui.archiveSprintExp[id] } } });
+  const exp = data.ui.archiveSprintExp || {};
+  const Sep = () => <span style={{ color: "var(--fg-4)", margin: "0 4px" }}>·</span>;
+  const truncTitle = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      {data.archiveEpics.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={AH}>{t("epics")} <span style={AHCount}>{data.archiveEpics.length}</span></div>
+          {data.archiveEpics.map((e, idx) => (
+            <div key={e.id} style={AR}>
+              <button onClick={() => restoreEpic(idx)} title={t("restore")} className="icon-btn" style={{ ...B, color: "var(--fg-2)" }}>↩</button>
+              <span style={{ color: "var(--fg-4)" }}>–</span>
+              <span style={{ textDecoration: "line-through", cursor: "pointer", flex: 1, minWidth: 0, ...truncTitle }} onClick={() => openEpic(e)}>
+                {e.text || t("untitled")}
+              </span>
+              {!narrow && <span style={{ fontSize: 10, color: "var(--fg-4)", fontStyle: "italic" }}>{fmt(e.archivedAt, lang)}</span>}
+              <button onClick={() => u({ archiveEpics: data.archiveEpics.filter((_, i) => i !== idx) })}
+                title={t("deleteForever")} className="icon-btn" style={{ ...B, color: "var(--danger-soft)", fontSize: 13 }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {data.archiveSprints.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={AH}>{t("sprints")} <span style={AHCount}>{data.archiveSprints.length}</span></div>
+          {data.archiveSprints.map((sp, idx) => (
+            <div key={sp.id} style={{ marginBottom: 6 }}>
+              <div style={AR}>
+                <button onClick={() => restoreSprint(idx)} title={t("restore")} className="icon-btn" style={{ ...B, color: "var(--fg-2)" }}>↩</button>
+                <button onClick={() => toggle(sp.id)} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{exp[sp.id] ? "▾" : "▸"}</button>
+                <span style={{ fontWeight: 600, fontSize: 13, color: "var(--fg-2)", minWidth: 0, ...truncTitle, flex: narrow ? 1 : "0 1 auto" }}>{sp.name}</span>
+                {!narrow && sp.goal && <><Sep /><span style={{ fontSize: 11, color: "var(--fg-3)", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sp.goal}</span></>}
+                {!narrow && <span style={{ flex: 1 }} />}
+                <span style={{ fontSize: 10, color: "var(--fg-3)", flexShrink: 0 }}>{sp.tasks.length}</span>
+                {!narrow && <><Sep /><span style={{ fontSize: 10, color: "var(--fg-4)", fontStyle: "italic" }}>{fmt(sp.archivedAt, lang)}</span></>}
+                <button onClick={() => u({ archiveSprints: data.archiveSprints.filter((_, i) => i !== idx) })}
+                  title={t("deleteForever")} className="icon-btn" style={{ ...B, color: "var(--danger-soft)", fontSize: 13 }}>×</button>
+              </div>
+              {exp[sp.id] && sp.tasks.map(tk => {
+                const ep = allEpics.find(e => e.id === tk.epicId);
+                const pr = projects.find(p => p.id === tk.projectId);
+                return (
+                  <div key={tk.id} onClick={() => openTask(tk, { arcSprint: idx })}
+                    style={{ marginLeft: 40, display: "flex", alignItems: "baseline", gap: 8, color: "var(--fg-3)", fontSize: 13, lineHeight: "24px", cursor: "pointer" }}>
+                    <span style={{ color: tk.done ? "var(--accent)" : "var(--fg-4)" }}>{tk.done ? "✓" : "○"}</span>
+                    <span style={tk.done ? { textDecoration: "line-through" } : {}}>{tk.text || t("untitled")}</span>
+                    {ep && <span style={{ fontSize: 10, color: "var(--fg-3)" }}>#{ep.text}</span>}
+                    {pr && <Pill>{pr.name}</Pill>}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {data.archiveTasks.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={AH}>{t("tasks")} <span style={AHCount}>{data.archiveTasks.length}</span></div>
+          {data.archiveTasks.map((tk, idx) => {
+            const ep = allEpics.find(e => e.id === tk.epicId);
+            const pr = projects.find(p => p.id === tk.projectId);
+            if (narrow) {
+              return (
+                <div key={tk.id} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 4 }}>
+                  <button onClick={() => restoreTask(idx)} title={t("restore")} className="icon-btn" style={{ ...B, color: "var(--fg-2)" }}>↩</button>
+                  <div style={{ flex: 1, minWidth: 0, paddingTop: 4 }}>
+                    <div style={{ textDecoration: "line-through", color: "var(--fg-3)", fontSize: 13, ...truncTitle, cursor: "pointer" }}
+                         onClick={() => openTask(tk, "archiveTask")}>{tk.text || t("untitled")}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, fontSize: 10, color: "var(--fg-4)" }}>
+                      {pr && <Pill>{pr.name}</Pill>}
+                      {ep && <span style={{ ...truncTitle, maxWidth: "40%" }}>#{ep.text}</span>}
+                      <span style={{ flex: 1 }} />
+                      <span style={{ fontStyle: "italic" }}>{fmt(tk.archivedAt, lang)}</span>
+                    </div>
+                  </div>
+                  <button onClick={() => u({ archiveTasks: data.archiveTasks.filter((_, i) => i !== idx) })}
+                    title={t("deleteForever")} className="icon-btn" style={{ ...B, color: "var(--danger-soft)", fontSize: 13 }}>×</button>
+                </div>
+              );
+            }
+            return (
+              <div key={tk.id} style={AR}>
+                <button onClick={() => restoreTask(idx)} title={t("restore")} className="icon-btn" style={{ ...B, color: "var(--fg-2)" }}>↩</button>
+                <span style={{ color: "var(--fg-4)" }}>–</span>
+                <span style={{ textDecoration: "line-through", cursor: "pointer", flex: 1 }} onClick={() => openTask(tk, "archiveTask")}>
+                  {tk.text || t("untitled")}
+                </span>
+                {ep && <span style={{ fontSize: 10, color: "var(--fg-3)" }}>#{ep.text}</span>}
+                {pr && <Pill>{pr.name}</Pill>}
+                <Sep />
+                <span style={{ fontSize: 10, color: "var(--fg-4)", fontStyle: "italic" }}>{fmt(tk.archivedAt, lang)}</span>
+                <button onClick={() => u({ archiveTasks: data.archiveTasks.filter((_, i) => i !== idx) })}
+                  title={t("deleteForever")} className="icon-btn" style={{ ...B, color: "var(--danger-soft)", fontSize: 13 }}>×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {data.archiveEpics.length + data.archiveSprints.length + data.archiveTasks.length === 0 && (
+        <div style={{ color: "var(--fg-4)", fontSize: 13, marginLeft: 8, fontStyle: "italic" }}>{t("empty")}</div>
+      )}
+    </div>
+  );
+}
+
+/* ── Main ── */
+export default function App() {
+  const { data, loading, save } = useStore();
+  const [modal, setModal] = useState(null);
+  const narrow = useNarrow();
+  const lang = data?.ui?.lang || "en";
+  const t = useMemo(() => tFn(lang), [lang]);
+  const allTasks = useAllTasks(data, t);
+  const allEpics = useAllEpics(data);
+
+  const epicsRaw = data?.epics;
+  const epicsDir = data?.sort?.epics;
+  const activeP = data?.activeProject;
+  const visibleEpics = useMemo(
+    () => sortArr((epicsRaw || []).filter(x => matchesProject(x, activeP)), epicsDir || "desc"),
+    [epicsRaw, activeP, epicsDir]
+  );
+
+  const theme = data?.ui?.theme;
+  useEffect(() => {
+    if (!theme) return;
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+  useEffect(() => {
+    document.documentElement.setAttribute("lang", lang);
+  }, [lang]);
+
+  if (loading) return <div style={{ padding: 40, fontFamily: "monospace", color: "var(--fg-2)" }}>...</div>;
+  if (!data) return null;
+  const u = (p) => save({ ...data, ...p });
+  const active = data.activeProject;
+
+  const visibleSprints = sortArr(data.sprints, data.sort.sprints);
+
+  const updateTaskInPlace = (updated, source) => {
+    if (source === "archiveTask") {
+      u({ archiveTasks: data.archiveTasks.map(x => x.id === updated.id ? updated : x) }); return;
+    }
+    if (typeof source === "object" && source.arcSprint !== undefined) {
+      const a = [...data.archiveSprints];
+      a[source.arcSprint] = { ...a[source.arcSprint], tasks: a[source.arcSprint].tasks.map(x => x.id === updated.id ? updated : x) };
+      u({ archiveSprints: a }); return;
+    }
+    if (typeof source === "object" && source.sprint !== undefined) {
+      const s = [...data.sprints];
+      s[source.sprint] = { ...s[source.sprint], tasks: s[source.sprint].tasks.map(x => x.id === updated.id ? updated : x) };
+      u({ sprints: s });
+    }
+  };
+
+  const openTask = (task, source) => setModal({ type: "task", task, source });
+  const openEpic = (epic, readOnly = false) => setModal({ type: "epic", epic, readOnly });
+  const openSprint = (si) => setModal({ type: "sprint", sprintIndex: si });
+
+  const toggleDone = (si, id) => {
+    const s = [...data.sprints];
+    s[si] = { ...s[si], tasks: s[si].tasks.map(t => t.id === id ? { ...t, done: !t.done } : t) };
+    u({ sprints: s });
+  };
+
+  const softArchiveTask = (si, id) => {
+    const t = data.sprints[si].tasks.find(x => x.id === id); if (!t) return;
+    const s = [...data.sprints];
+    s[si] = { ...s[si], tasks: s[si].tasks.filter(x => x.id !== id) };
+    u({ sprints: s, archiveTasks: [{ ...t, archivedAt: now() }, ...data.archiveTasks] });
+  };
+  const softArchiveSprint = (si) => {
+    const sp = data.sprints[si];
+    u({ sprints: data.sprints.filter((_, i) => i !== si), archiveSprints: [{ ...sp, archivedAt: now() }, ...data.archiveSprints] });
+  };
+  const softArchiveEpic = (id) => {
+    const e = data.epics.find(x => x.id === id); if (!e) return;
+    u({ epics: data.epics.filter(x => x.id !== id), archiveEpics: [{ ...e, archivedAt: now() }, ...data.archiveEpics] });
+  };
+
+  const restoreTask = idx => {
+    const { archivedAt, ...task } = data.archiveTasks[idx];
+    if (data.sprints.length === 0) {
+      const sp = { ...mkSprint(1), name: t("backlog"), tasks: [task] };
+      u({ archiveTasks: data.archiveTasks.filter((_, i) => i !== idx), sprints: [sp] });
+    } else {
+      const s = [...data.sprints]; s[0] = { ...s[0], tasks: [...s[0].tasks, task] };
+      u({ archiveTasks: data.archiveTasks.filter((_, i) => i !== idx), sprints: s });
+    }
+  };
+  const restoreSprint = idx => {
+    const { archivedAt, ...sprint } = data.archiveSprints[idx];
+    u({ archiveSprints: data.archiveSprints.filter((_, i) => i !== idx), sprints: [...data.sprints, sprint] });
+  };
+  const restoreEpic = idx => {
+    const { archivedAt, ...epic } = data.archiveEpics[idx];
+    u({ archiveEpics: data.archiveEpics.filter((_, i) => i !== idx), epics: [...data.epics, epic] });
+  };
+
+  const moveTask = (taskId, fromIdx, toSprintId) => {
+    const s = [...data.sprints];
+    const task = s[fromIdx].tasks.find(x => x.id === taskId); if (!task) return;
+    s[fromIdx] = { ...s[fromIdx], tasks: s[fromIdx].tasks.filter(x => x.id !== taskId) };
+    const ti = s.findIndex(x => x.id === toSprintId); if (ti < 0) return;
+    s[ti] = { ...s[ti], tasks: [...s[ti].tasks, task] };
+    u({ sprints: s });
+  };
+
+  const findTaskSource = (t) => {
+    for (let i = 0; i < data.sprints.length; i++) if (data.sprints[i].tasks.find(x => x.id === t.id)) return { sprint: i };
+    if (data.archiveTasks.find(x => x.id === t.id)) return "archiveTask";
+    for (let i = 0; i < data.archiveSprints.length; i++) if (data.archiveSprints[i].tasks.find(x => x.id === t.id)) return { arcSprint: i };
+    return null;
+  };
+
+  const totalArc = data.archiveEpics.length + data.archiveSprints.length + data.archiveTasks.length;
+
+  // Project CRUD
+  const addProject = () => {
+    const name = t("projectN", data.pc);
+    u({ projects: [...data.projects, mkProject(name)], pc: data.pc + 1 });
+  };
+  const renameProject = (id, name) => u({ projects: data.projects.map(p => p.id === id ? { ...p, name } : p) });
+  const deleteProject = (id) => u({
+    projects: data.projects.filter(p => p.id !== id),
+    epics: data.epics.map(e => e.projectId === id ? { ...e, projectId: null } : e),
+    archiveEpics: data.archiveEpics.map(e => e.projectId === id ? { ...e, projectId: null } : e),
+    sprints: data.sprints.map(s => ({ ...s, tasks: s.tasks.map(t => t.projectId === id ? { ...t, projectId: null } : t) })),
+    archiveSprints: data.archiveSprints.map(s => ({ ...s, tasks: s.tasks.map(t => t.projectId === id ? { ...t, projectId: null } : t) })),
+    archiveTasks: data.archiveTasks.map(t => t.projectId === id ? { ...t, projectId: null } : t),
+    activeProject: data.activeProject === id ? null : data.activeProject,
+  });
+
+  const inheritedProject = active && active !== "none" ? active : null;
+
+  return (
+    <div style={R}>
+      {/* Modals */}
+      {modal?.type === "task" && (() => {
+        const readOnly = modal.source === "archiveTask" || typeof modal.source?.arcSprint === "number";
+        const currentSprintIdx = typeof modal.source?.sprint === "number" ? modal.source.sprint : null;
+        const sprintOpts = currentSprintIdx != null
+          ? data.sprints.filter((_, i) => i !== currentSprintIdx)
+          : [];
+        return (
+          <TaskModal
+            task={modal.task} allEpics={allEpics} projects={data.projects} sprints={sprintOpts}
+            readOnly={readOnly} t={t} lang={lang}
+            onUpdate={tk => updateTaskInPlace(tk, modal.source)}
+            onMove={currentSprintIdx != null ? (targetSprintId) => moveTask(modal.task.id, currentSprintIdx, targetSprintId) : null}
+            onClose={() => setModal(null)}
+          />
+        );
+      })()}
+      {modal?.type === "epic" && (
+        <EpicModal
+          epic={modal.epic} allTasks={allTasks} projects={data.projects} readOnly={modal.readOnly} t={t}
+          onUpdate={ep => u({ epics: data.epics.map(x => x.id === ep.id ? ep : x) })}
+          onClose={() => setModal(null)}
+          onOpenTask={tk => { const src = findTaskSource(tk); if (src) setModal({ type: "task", task: tk, source: src }); }}
+        />
+      )}
+      {modal?.type === "sprint" && (
+        <SprintModal
+          sprint={data.sprints[modal.sprintIndex]} t={t}
+          onUpdate={sp => { const s = [...data.sprints]; s[modal.sprintIndex] = sp; u({ sprints: s }); }}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.type === "projects" && (
+        <ProjectsModal
+          projects={data.projects} onAdd={addProject} onRename={renameProject} onDelete={deleteProject} t={t}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.type === "reset" && (
+        <ResetModal t={t} onConfirm={() => { save({ ...empty, wasReset: true }); setModal(null); }} onClose={() => setModal(null)} />
+      )}
+
+      {/* Wordmark "sdvg.io" — eyebrow в дальнем верхнем-левом, только desktop. */}
+      {!narrow && <Wordmark />}
+
+      {/* Floating utility cluster — fixed top-right.
+         Shows current state (lang code + theme glyph). Click toggles. */}
+      <UtilityCluster lang={lang} theme={theme} t={t}
+        onToggleLang={() => u({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } })}
+        onToggleTheme={() => {
+          const eff = theme || "light";
+          u({ ui: { ...data.ui, theme: eff === "dark" ? "light" : "dark" } });
+        }}
+      />
+
+      {/* Filter bar (only if projects exist) */}
+      {data.projects.length > 0 && (
+        <FilterBar projects={data.projects} active={active} t={t}
+          onSelect={id => u({ activeProject: id })}
+          onOpenProjects={() => setModal({ type: "projects" })} />
+      )}
+
+      {/* Epics */}
+      <div style={SEC}>
+        <div style={HRow}>
+          <span style={H}>{t("epics")}</span>
+          <button onClick={() => u({ epics: [...data.epics, mkEpic(inheritedProject)] })} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
+          {data.epics.length > 1 && <SortToggle t={t} dir={data.sort.epics} onToggle={() => u({ sort: { ...data.sort, epics: data.sort.epics === "desc" ? "asc" : "desc" } })} />}
+        </div>
+        {visibleEpics.map(e => {
+          const cnt = allTasks.filter(tk => tk.epicId === e.id).length;
+          const pr = data.projects.find(p => p.id === e.projectId);
+          return (
+            <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
+              <span style={{ color: "var(--fg-4)" }}>–</span>
+              <div style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
+                <Inline value={e.text} onSave={txt => u({ epics: data.epics.map(x => x.id === e.id ? { ...x, text: txt } : x) })} placeholder={t("newEpic")} />
+                {cnt > 0 && <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{cnt}</span>}
+                {pr && <Pill>{pr.name}</Pill>}
+              </div>
+              {narrow ? (
+                <OverflowMenu items={[
+                  { label: t("open"), onClick: () => openEpic(e) },
+                  { label: t("archiveAction"), onClick: () => softArchiveEpic(e.id), danger: true },
+                ]} />
+              ) : (
+                <>
+                  <button onClick={() => openEpic(e)} title={t("open")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
+                  <button onClick={() => softArchiveEpic(e.id)} title={t("archiveAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
+                </>
+              )}
+            </div>
+          );
+        })}
+        {visibleEpics.length === 0 && data.epics.length > 0 && (
+          <div style={{ color: "var(--fg-4)", fontSize: 12, fontStyle: "italic", marginLeft: 16 }}>{t("noEpicsInProject")}</div>
+        )}
+      </div>
+
+      {/* Sprints header with sort */}
+      <div style={HRow}>
+        <span style={{ ...H, color: "var(--fg-3)" }}>{t("sprints")}</span>
+        {visibleSprints.length > 1 && <SortToggle t={t} dir={data.sort.sprints} onToggle={() => u({ sort: { ...data.sort, sprints: data.sort.sprints === "desc" ? "asc" : "desc" } })} />}
+      </div>
+
+      {/* Sprint cards */}
+      {visibleSprints.map(sp => {
+        const si = data.sprints.indexOf(sp);
+        const tasks = sp.tasks.filter(tk => matchesProject(tk, active));
+        const doneCount = tasks.filter(tk => tk.done).length;
+        const total = tasks.length;
+        return (
+          <div key={sp.id} style={SPRINT_CARD}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <Inline value={sp.name} onSave={txt => { const s = [...data.sprints]; s[si] = { ...s[si], name: txt }; u({ sprints: s }); }}
+                placeholder={t("sprint")} style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }} />
+              {total > 0 && <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{doneCount}/{total}</span>}
+              <span style={{ flex: 1 }} />
+              <button onClick={() => { const s = [...data.sprints]; s[si] = { ...s[si], tasks: [...s[si].tasks, mkTask("", inheritedProject)] }; u({ sprints: s }); }}
+                title={t("addTask")} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{t("addTask")}</button>
+              {narrow ? (
+                <OverflowMenu items={[
+                  { label: t("settings"), onClick: () => openSprint(si) },
+                  { label: t("archiveSprintAction"), onClick: () => softArchiveSprint(si), danger: true },
+                ]} />
+              ) : (
+                <>
+                  <button onClick={() => openSprint(si)} title={t("settings")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
+                  <button onClick={() => softArchiveSprint(si)} title={t("archiveSprintAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
+                </>
+              )}
+            </div>
+            {sp.goal && <div style={{ fontSize: 12, color: "var(--fg-3)", marginTop: 4, fontStyle: "italic" }}>{sp.goal}</div>}
+            <div style={{ marginTop: 8 }}>
+              {tasks.map(tk => (
+                <TaskRow key={tk.id} task={tk} allEpics={allEpics} projects={data.projects} narrow={narrow} t={t} lang={lang}
+                  onUpdate={task => { const s = [...data.sprints]; s[si] = { ...s[si], tasks: s[si].tasks.map(x => x.id === task.id ? task : x) }; u({ sprints: s }); }}
+                  onSoftDelete={id => softArchiveTask(si, id)}
+                  onToggleDone={id => toggleDone(si, id)}
+                  moveTargets={data.sprints.filter((_, i) => i !== si).map(s => ({ key: s.id, label: s.name }))}
+                  onMove={(id, toSprintId) => moveTask(id, si, toSprintId)}
+                  onOpen={task => openTask(task, { sprint: si })}
+                />
+              ))}
+              {tasks.length === 0 && sp.tasks.length > 0 && (
+                <div style={{ color: "var(--fg-4)", fontSize: 12, fontStyle: "italic", marginLeft: 22 }}>{t("noTasksInProject")}</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      <button onClick={() => u({ sprints: [...data.sprints, mkSprint(data.sc)], sc: (data.sc || 1) + 1 })}
+        style={{ ...ADD, marginTop: 6, marginBottom: 32 }}>{t("addSprint")}</button>
+
+      {/* Archive */}
+      <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 20 }}>
+        <button onClick={() => u({ ui: { ...data.ui, archiveOpen: !data.ui.archiveOpen } })}
+          style={{ ...B, fontWeight: 700, fontSize: 15, color: "var(--fg)" }}>
+          {t("archive")} {data.ui.archiveOpen ? "▾" : "▸"}
+          <span style={{ fontWeight: 400, fontSize: 12, color: "var(--fg-3)", marginLeft: 8 }}>{totalArc}</span>
+        </button>
+        {data.ui.archiveOpen && (
+          <ArchiveView
+            data={data} u={u} allEpics={allEpics} projects={data.projects} t={t} lang={lang}
+            openTask={openTask} openEpic={e => openEpic(e, true)}
+            restoreTask={restoreTask} restoreSprint={restoreSprint} restoreEpic={restoreEpic}
+          />
+        )}
+      </div>
+
+      {/* Footer: only reset (destructive — buried).
+         projects-button shown only when no projects exist (FilterBar's ⚙ handles it otherwise).
+         Theme + lang moved to floating cluster top-right. */}
+      <div style={{ marginTop: 56, display: "flex", gap: 18, alignItems: "center" }}>
+        {data.projects.length === 0 && (
+          <button onClick={() => setModal({ type: "projects" })} style={{ ...B, color: "var(--fg-3)", fontSize: 12, padding: "6px 0" }}>{t("projects").toLowerCase()}</button>
+        )}
+        <button onClick={() => setModal({ type: "reset" })} style={{ ...B, color: "var(--fg-3)", fontSize: 12, padding: "6px 0" }}>{t("reset")}</button>
+      </div>
+    </div>
+  );
+}
+
+/* ── Wordmark — едва различимый "sdvg.io" в верхнем-левом углу.
+   Только desktop. Никогда не кликабельный, чтобы не отвлекал. */
+function Wordmark() {
+  return (
+    <div style={{
+      position: "fixed",
+      top: "calc(14px + env(safe-area-inset-top))",
+      left: "calc(16px + env(safe-area-inset-left))",
+      fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
+      fontSize: 11, fontWeight: 500,
+      color: "var(--fg-4)", opacity: 0.55,
+      letterSpacing: 0.4,
+      pointerEvents: "none", userSelect: "none",
+      zIndex: 50,
+    }}>sdvg.io</div>
+  );
+}
+
+/* ── Floating utility cluster (top-right, position: fixed).
+   Shows CURRENT state for both lang + theme. Click toggles to the other.
+   Tiny visual footprint, scroll-independent, honors safe-area-inset. */
+function UtilityCluster({ lang, theme, t, onToggleLang, onToggleTheme }) {
+  const eff = theme || "light";
+  const langLabel = lang === "ru" ? "RU" : "EN";
+  const themeGlyph = eff === "dark" ? "☾" : "☀";
+  const nextTheme = eff === "dark" ? t("light") : t("dark");
+  const nextLang = lang === "ru" ? t("english") : t("russian");
+  const wrap = {
+    position: "fixed",
+    top: "calc(8px + env(safe-area-inset-top))",
+    right: "calc(8px + env(safe-area-inset-right))",
+    display: "flex", alignItems: "center", gap: 0,
+    zIndex: 50,
+  };
+  const btn = {
+    all: "unset", cursor: "pointer",
+    fontFamily: "inherit", fontSize: 11,
+    color: "var(--fg-3)", opacity: 0.5,
+    padding: "6px 8px", minWidth: 32, minHeight: 32,
+    borderRadius: 5,
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    transition: "opacity var(--fast) var(--ease-out-quart), background var(--fast) var(--ease-out-quart)",
+  };
+  const onEnter = e => { e.currentTarget.style.opacity = 1; e.currentTarget.style.background = "var(--surface)"; };
+  const onLeave = e => { e.currentTarget.style.opacity = 0.5; e.currentTarget.style.background = "transparent"; };
+  return (
+    <div style={wrap}>
+      <button onClick={onToggleLang} title={t("switchTo", nextLang)}
+        onMouseEnter={onEnter} onMouseLeave={onLeave}
+        style={{ ...btn, fontWeight: 600, letterSpacing: 0.4 }}>{langLabel}</button>
+      <button onClick={onToggleTheme} title={t("switchTo", nextTheme)}
+        onMouseEnter={onEnter} onMouseLeave={onLeave}
+        style={{ ...btn, fontSize: 16, lineHeight: 1 }}>{themeGlyph}</button>
+    </div>
+  );
+}
+
+/* ── Styles ── */
+const R = {
+  maxWidth: 560, margin: "0 auto",
+  padding: "var(--pad)",
+  fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
+  fontSize: 14, color: "var(--fg)", lineHeight: 1.6,
+};
+const SEC = { marginBottom: 28 };
+const H = { fontSize: 15, fontWeight: 700, color: "var(--fg)" };
+const HRow = { display: "flex", alignItems: "baseline", gap: 4, marginBottom: 8 };
+const B = { all: "unset", cursor: "pointer", fontFamily: "inherit", fontSize: 14 };
+const ADD = { all: "unset", cursor: "pointer", fontFamily: "inherit", color: "var(--fg-3)", fontSize: 13, display: "block" };
+const SPRINT_CARD = {
+  background: "var(--surface)",
+  border: "1px solid var(--line)",
+  borderRadius: 6,
+  padding: "var(--sprint-pad)",
+  marginBottom: 14,
+};
+const AR = { display: "flex", alignItems: "center", gap: 8, minHeight: 28, color: "var(--fg-2)", fontSize: 13 };
+const AH = { fontSize: 13, fontWeight: 600, color: "var(--fg-2)", marginBottom: 6, display: "flex", alignItems: "baseline", gap: 6 };
+const AHCount = { fontSize: 11, color: "var(--fg-4)", fontWeight: 400 };
+const O = {
+  bg: { position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 10 },
+  box: { background: "var(--panel)", color: "var(--fg)", borderRadius: 8, padding: "var(--modal-pad)", width: "var(--modal-w)", maxWidth: 480, maxHeight: "90vh", overflow: "auto", boxShadow: "var(--modal-shadow)", fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace", border: "1px solid var(--line)" },
+  dd: { position: "absolute", right: 0, top: "calc(100% + 4px)", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, padding: 3, zIndex: 30, minWidth: 140, boxShadow: "var(--menu-shadow)" },
+  label: { display: "block", fontSize: 11, color: "var(--fg-2)", marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.4 },
+  textarea: { all: "unset", display: "block", width: "100%", font: "inherit", fontSize: 13, color: "var(--fg)", border: "1px solid var(--line)", borderRadius: 4, padding: 10, whiteSpace: "pre-wrap", minHeight: 100, lineHeight: 1.55, boxSizing: "border-box", background: "var(--bg)" },
+};
