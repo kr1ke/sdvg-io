@@ -1,11 +1,12 @@
-# syntax=docker/dockerfile:1.7
 # Multi-stage: vite build → static serve.
 # Подходит для Railway (слушает $PORT), Fly.io, любой контейнерной платформы.
+# Без cache-mount намеренно: Railway BuildKit требует своего prefix'а к cache id,
+# что ломает портативность. npm ci и без mount достаточно быстр (~30c для этого репо).
 
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN --mount=type=cache,id=npm,target=/root/.npm npm ci --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
