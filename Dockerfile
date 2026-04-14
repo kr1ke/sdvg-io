@@ -16,7 +16,7 @@ ENV NODE_ENV=production
 # `serve -s` отдаёт SPA fallback на index.html, корректные MIME для .webmanifest и .svg.
 RUN npm install -g serve@14 --no-audit --no-fund
 COPY --from=builder /app/dist ./dist
-# Railway проставит свой $PORT; локально по дефолту 3000.
-ENV PORT=3000
+# Хардкод 3000 — Railway инжектит свой $PORT, который ломает proxy mapping
+# когда в Networking задан фиксированный target. Exec form для корректного SIGTERM.
 EXPOSE 3000
-CMD ["sh", "-c", "serve -s dist -l ${PORT:-3000}"]
+CMD ["serve", "-s", "dist", "-l", "3000"]
