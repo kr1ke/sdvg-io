@@ -156,9 +156,11 @@
       }
 
       /* Kill 300ms tap delay на iOS/Android; применяем только к interactive
-         элементам — не хотим запрещать pinch-zoom/pan на контенте. */
+         элементам — не хотим запрещать pinch-zoom/pan на контенте.
+         !important нужен — многие кнопки в App.jsx делают `all: unset`,
+         который сбрасывает touch-action обратно к auto. */
       button, a, [role="button"], input, textarea, select, label {
-        touch-action: manipulation;
+        touch-action: manipulation !important;
       }
 
       /* iOS zoom-on-focus: если input <16px, Safari насильно зумит viewport.

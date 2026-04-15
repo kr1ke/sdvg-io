@@ -617,7 +617,10 @@ function Sheet({ children, onClose }) {
             borderRadius: "16px 16px 0 0",
             padding: "var(--modal-pad)",
             paddingTop: 8,
-            paddingBottom: "calc(var(--modal-pad) + env(safe-area-inset-bottom))",
+            /* Bottom padding: 28px breathing room + home-indicator inset.
+               var(--modal-pad) был shorthand (18px 14px), calc'ить с shorthand
+               нельзя — silent fallback оставлял кнопки вплотную к краю экрана. */
+            paddingBottom: "calc(28px + env(safe-area-inset-bottom))",
             maxHeight: "92vh",
             boxShadow: "0 -10px 32px rgba(0, 0, 0, 0.18)",
             fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
