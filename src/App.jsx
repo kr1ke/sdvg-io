@@ -1525,7 +1525,7 @@ function UtilityCluster({ lang, theme, t, canUndo, onUndo, sort, onToggleSort, o
   const nextLang = lang === "ru" ? t("english") : t("russian");
   const sortLabel = sort === "desc" ? `↓ ${t("newest")}` : `↑ ${t("oldest")}`;
   return (
-    <div style={{
+    <div className="util-cluster" style={{
       position: "fixed",
       top: "calc(8px + env(safe-area-inset-top))",
       right: "calc(8px + env(safe-area-inset-right))",

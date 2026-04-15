@@ -201,6 +201,24 @@
         }
       }
 
+      /* Utility cluster wrapper — фон с blur, чтобы при скролле контент
+         не "просвечивал" через полупрозрачные кнопки (cluster fixed на top-right,
+         задачи/эпики скроллятся под ним). Backdrop-filter делает содержимое сзади
+         размытым, кнопки остаются читаемыми. Purposeful glassmorphism — решает
+         реальную проблему читаемости, не декоративно. */
+      .util-cluster {
+        background: var(--bg);
+        border-radius: 20px;
+        padding: 2px;
+      }
+      @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+        .util-cluster {
+          background: color-mix(in oklab, var(--bg) 72%, transparent);
+          -webkit-backdrop-filter: blur(14px) saturate(1.4);
+          backdrop-filter: blur(14px) saturate(1.4);
+        }
+      }
+
       /* Utility cluster (RU/EN, тема) — CSS-only hover чтобы не было sticky-эффекта на тач:
          JS onMouseEnter/Leave фейерится и при tap'е на мобиле, оставляя hover-стили. */
       .util-btn {
