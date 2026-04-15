@@ -9,6 +9,12 @@ if (!import.meta.env.DEV) {
   registerSW({ immediate: true });
 }
 
+// Prevent OS from evicting our localStorage under disk pressure.
+// Fire-and-forget — если браузер не поддерживает или отказал, ничего не делаем.
+if (typeof navigator !== "undefined" && navigator.storage?.persist) {
+  navigator.storage.persist().catch(() => {});
+}
+
 // Shim the async key-value API used by the app to localStorage.
 // Keeps App.jsx identical to the PRD reference (`window.storage.get/set`).
 window.storage = {

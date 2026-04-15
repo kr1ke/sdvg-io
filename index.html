@@ -155,6 +155,21 @@
                     transform var(--fast) var(--ease-out-quart);
       }
 
+      /* Kill 300ms tap delay на iOS/Android; применяем только к interactive
+         элементам — не хотим запрещать pinch-zoom/pan на контенте. */
+      button, a, [role="button"], input, textarea, select, label {
+        touch-action: manipulation;
+      }
+
+      /* iOS zoom-on-focus: если input <16px, Safari насильно зумит viewport.
+         На coarse-pointer устройствах поднимаем до 16, inline fontSize
+         перекрывается !important (он задан в App.jsx для desktop-плотности). */
+      @media (pointer: coarse) {
+        input, textarea, select {
+          font-size: 16px !important;
+        }
+      }
+
       @media (hover: hover) and (pointer: fine) {
         button:active:not(:disabled) { transform: scale(0.96); }
       }
@@ -323,6 +338,24 @@
       }
       .anim-sheet-overlay {
         animation: sheet-overlay 220ms var(--ease-out-quart);
+      }
+
+      /* Vaul drawer: нужен CSS для анимации enter/exit, Vaul управляет
+         через data-state. Drag inline-стили Vaul перекрывают этот transform,
+         поэтому во время жеста наш transition не мешает. */
+      [data-vaul-drawer-direction="bottom"] {
+        transform: translate3d(0, 100%, 0);
+        transition: transform 300ms var(--ease-out-expo);
+        will-change: transform;
+      }
+      [data-vaul-drawer-direction="bottom"][data-state="open"] {
+        transform: translate3d(0, 0, 0);
+      }
+      [data-vaul-overlay] {
+        animation: sheet-overlay 220ms var(--ease-out-quart);
+      }
+      [data-vaul-overlay][data-state="closed"] {
+        animation: sheet-overlay 180ms var(--ease-out-quart) reverse;
       }
 
       .anim-overlay { animation: fade-in var(--med) var(--ease-out-quart); }

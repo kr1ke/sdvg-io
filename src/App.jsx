@@ -1,8 +1,26 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Drawer } from "vaul";
 
 const KEY = "tracker-v6";
 const uid = () => Math.random().toString(36).slice(2, 9);
 const now = () => Date.now();
+
+/* Тактильный отклик. iOS Safari не поддерживает Vibration API (silently no-ops),
+   Android/Chromium — работает. ~10ms = acknowledgement, [10,30,10] = destructive. */
+const haptic = (pattern = 10) => {
+  try { navigator.vibrate?.(pattern); } catch {}
+};
+
+/* View Transitions API: плавный crossfade для state-swap'ов (фильтр, архив,
+   сортировка). Поддерживается в Chrome/Edge/Firefox/Safari 18+. Fallback —
+   просто вызываем fn() без анимации. Не оборачиваем модалки — Vaul сам анимирует. */
+const withTransition = (fn) => {
+  if (typeof document !== "undefined" && document.startViewTransition) {
+    document.startViewTransition(() => fn());
+  } else {
+    fn();
+  }
+};
 
 const LOCALE = { en: "en-US", ru: "ru-RU" };
 
@@ -313,6 +331,7 @@ function Inline({ value, onSave, placeholder, style: s = {} }) {
       onBlur={commit}
       onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setT(value); setEd(false); } }}
       placeholder={placeholder}
+      autoComplete="off" autoCapitalize="sentences" enterKeyHint="done" spellCheck
       style={{ all: "unset", width: "100%", font: "inherit", color: "inherit", borderBottom: "1.5px solid var(--fg-3)", ...s }}
     />
   );
@@ -453,6 +472,7 @@ function NewSprintForm({ projects, defaultName, t, onCreate, onCreateForAll, onC
       <input
         ref={ref} value={name} onChange={e => setName(e.target.value)} onKeyDown={onKey}
         placeholder={t("name")}
+        autoComplete="off" autoCapitalize="sentences" enterKeyHint="next" spellCheck
         style={{
           all: "unset", font: "inherit", fontSize: 14,
           width: "100%", borderBottom: "1.5px solid var(--fg-4)",
@@ -463,6 +483,7 @@ function NewSprintForm({ projects, defaultName, t, onCreate, onCreateForAll, onC
         <input
           value={goal} onChange={e => setGoal(e.target.value)} onKeyDown={onKey}
           placeholder={t("sprintGoalPlaceholder")}
+          autoComplete="off" autoCapitalize="sentences" enterKeyHint="done" spellCheck
           style={{
             all: "unset", font: "inherit", fontSize: 13,
             flex: 1, borderBottom: "1.5px solid var(--fg-5)",
@@ -561,37 +582,59 @@ const matchesProject = (item, active) => {
 const sortArr = (arr, dir) => dir === "asc" ? [...arr].reverse() : arr;
 
 /* ── Sheet wrapper.
-   Desktop: centered modal (current behaviour, anim-box slide-up).
-   Mobile: bottom sheet — full width, top-rounded, slides up from bottom.
-   Both close on overlay click. */
+   Desktop: centered modal (unchanged — anim-box slide-up).
+   Mobile: Vaul bottom sheet — drag-to-dismiss, focus trap, scroll lock,
+   Radix Dialog a11y. Drag handle теперь реально draggable. */
+const SR_ONLY = {
+  position: "absolute", width: 1, height: 1, padding: 0, margin: -1,
+  overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap", border: 0,
+};
 function Sheet({ children, onClose }) {
   const narrow = useNarrow();
-  const bg = narrow ? {
-    position: "fixed", inset: 0, background: "var(--overlay)",
-    display: "flex", alignItems: "flex-end", justifyContent: "center",
-    zIndex: 100,
-  } : O.bg;
-  const box = narrow ? {
-    background: "var(--panel)", color: "var(--fg)",
-    borderRadius: "16px 16px 0 0",
-    padding: "var(--modal-pad)",
-    paddingTop: 8,
-    paddingBottom: "calc(var(--modal-pad) + env(safe-area-inset-bottom))",
-    width: "100%", maxHeight: "92vh", overflow: "auto",
-    // Native bottom-sheet поднимается на тёмный backdrop с явной тенью сверху
-    boxShadow: "0 -10px 32px rgba(0, 0, 0, 0.18)",
-    fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
-    borderTop: "1px solid var(--line)",
-  } : O.box;
+  if (narrow) {
+    return (
+      <Drawer.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{
+            position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
+          }} />
+          <Drawer.Content style={{
+            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 101,
+            background: "var(--panel)", color: "var(--fg)",
+            borderRadius: "16px 16px 0 0",
+            padding: "var(--modal-pad)",
+            paddingTop: 8,
+            paddingBottom: "calc(var(--modal-pad) + env(safe-area-inset-bottom))",
+            maxHeight: "92vh",
+            boxShadow: "0 -10px 32px rgba(0, 0, 0, 0.18)",
+            fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
+            borderTop: "1px solid var(--line)",
+            outline: "none",
+            display: "flex", flexDirection: "column",
+          }}>
+            {/* A11y: Vaul требует Title+Description, прячем через sr-only —
+                визуально повторять "Sheet" бессмысленно, смысл даёт контент. */}
+            <Drawer.Title style={SR_ONLY}>Sheet</Drawer.Title>
+            <Drawer.Description style={SR_ONLY}>Dialog</Drawer.Description>
+            <Drawer.Handle style={{
+              width: 40, height: 5, borderRadius: 3,
+              background: "var(--line-2)",
+              margin: "6px auto 14px",
+              flexShrink: 0,
+              cursor: "grab",
+            }} />
+            <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+              {children}
+            </div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+    );
+  }
+  // Desktop: centered modal — unchanged behaviour.
   return (
-    <div className={narrow ? "anim-sheet-overlay" : "anim-overlay"} style={bg} onClick={onClose}>
-      <div className={narrow ? "anim-sheet" : "anim-box"} style={box} onClick={e => e.stopPropagation()}>
-        {/* Drag-affordance: маленькая полоска сверху, как в iOS sheet */}
-        {narrow && (
-          <div style={{ display: "flex", justifyContent: "center", padding: "6px 0 14px" }}>
-            <div style={{ width: 40, height: 5, borderRadius: 3, background: "var(--line-2)" }} />
-          </div>
-        )}
+    <div className="anim-overlay" style={O.bg} onClick={onClose}>
+      <div className="anim-box" style={O.box} onClick={e => e.stopPropagation()}>
         {children}
       </div>
     </div>
@@ -641,6 +684,7 @@ function TaskModal({ task, allEpics, projects, sprints, onUpdate, onDelete, onCl
                 value={text} onChange={e => setText(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") cancel(); }}
                 placeholder={t("newTask")}
+                autoComplete="off" autoCapitalize="sentences" enterKeyHint="done" spellCheck
                 style={{
                   all: "unset", font: "inherit", fontSize: 16, fontWeight: 600,
                   width: "100%", color: "var(--fg)",
@@ -676,7 +720,9 @@ function TaskModal({ task, allEpics, projects, sprints, onUpdate, onDelete, onCl
 
         <label style={O.label}>{t("description")}</label>
         <textarea readOnly={readOnly} value={desc} onChange={e => setDesc(e.target.value)}
-          placeholder={t("notesPlaceholder")} rows={7} style={O.textarea} />
+          placeholder={t("notesPlaceholder")} rows={7}
+          autoComplete="off" autoCapitalize="sentences" spellCheck
+          style={O.textarea} />
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
           <button onClick={cancel} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
@@ -700,12 +746,16 @@ function SprintModal({ sprint, onUpdate, onClose, t }) {
         </div>
         <label style={O.label}>{t("name")}</label>
         <input value={name} onChange={e => setName(e.target.value)}
+          autoComplete="off" autoCapitalize="sentences" enterKeyHint="next" spellCheck
           style={{ all: "unset", font: "inherit", fontSize: 14, width: "100%", borderBottom: "1.5px solid var(--fg-3)", color: "var(--fg)", marginBottom: 14, paddingBottom: 2, boxSizing: "border-box" }} />
         <label style={O.label}>{t("goal")}</label>
         <input value={goal} onChange={e => setGoal(e.target.value)} placeholder={t("sprintGoalPlaceholder")}
+          autoComplete="off" autoCapitalize="sentences" enterKeyHint="next" spellCheck
           style={{ all: "unset", font: "inherit", fontSize: 13, width: "100%", borderBottom: "1.5px solid var(--fg-4)", color: "var(--fg)", marginBottom: 14, paddingBottom: 2, boxSizing: "border-box", fontStyle: goal ? "normal" : "italic" }} />
         <label style={O.label}>{t("description")}</label>
-        <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder={t("contextPlaceholder")} rows={5} style={O.textarea} />
+        <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder={t("contextPlaceholder")} rows={5}
+          autoComplete="off" autoCapitalize="sentences" spellCheck
+          style={O.textarea} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
           <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
           <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>
@@ -742,6 +792,7 @@ function EpicModal({ epic, allTasks, projects, onUpdate, onDelete, onClose, onOp
               ? <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)", wordBreak: "break-word" }}>{epic.text}</div>
               : <input autoFocus={!epic.text} value={text} onChange={e => setText(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") cancel(); }}
+                  autoComplete="off" autoCapitalize="sentences" enterKeyHint="done" spellCheck
                   style={{ all: "unset", font: "inherit", fontSize: 16, fontWeight: 700, width: "100%", borderBottom: "1.5px solid var(--fg-3)", color: "var(--fg)" }} />
             }
           </div>
@@ -824,6 +875,7 @@ function ResetModal({ onConfirm, onClose, t }) {
         <input ref={r} value={val} onChange={e => setVal(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && ok) onConfirm(); if (e.key === "Escape") onClose(); }}
           placeholder={t("resetPlaceholder")}
+          autoComplete="off" autoCapitalize="off" autoCorrect="off" enterKeyHint="send" spellCheck={false}
           style={{ all: "unset", font: "inherit", fontSize: 14, width: "100%", padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 4, boxSizing: "border-box", color: "var(--fg)", background: "var(--bg)" }} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
           <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
@@ -1087,10 +1139,32 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
 /* ── Main ── */
 export default function App() {
   const { data, loading, save, undo, canUndo } = useStore();
-  const [modal, setModal] = useState(null);
+  const [modal, setModalRaw] = useState(null);
   const [toast, setToast] = useState(null);
   const [showNewSprint, setShowNewSprint] = useState(false);
   const narrow = useNarrow();
+
+  /* History-API wrapper: открытие модалки кладёт state в history stack,
+     чтобы system back button (Android) и back-swipe (iOS Safari 17+)
+     закрывали sheet вместо выхода из приложения. */
+  const setModal = useCallback((m) => {
+    setModalRaw(prev => {
+      if (m && !prev) {
+        try { history.pushState({ sdvgModal: true }, ""); } catch {}
+      } else if (!m && prev && history.state?.sdvgModal) {
+        // Programmatic close (X/overlay) — потребляем history entry, иначе
+        // юзер тапнет back и выйдет из приложения "неожиданно".
+        try { history.back(); } catch {}
+      }
+      return m;
+    });
+  }, []);
+  useEffect(() => {
+    const onPop = () => setModalRaw(null);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   const lang = data?.ui?.lang || "en";
   const t = useMemo(() => tFn(lang), [lang]);
   const allTasks = useAllTasks(data, t);
@@ -1123,7 +1197,10 @@ export default function App() {
   // Undo handler — выставляет toast с labelом действия
   const doUndo = useCallback(async () => {
     const prev = await undo();
-    if (prev) setToast({ type: "undo", text: lang === "ru" ? "Отменено" : "Undone" });
+    if (prev) {
+      haptic(20);
+      setToast({ type: "undo", text: lang === "ru" ? "Отменено" : "Undone" });
+    }
   }, [undo, lang]);
 
   // Cmd/Ctrl+Z глобально, НО не перехватываем когда фокус в input/textarea —
@@ -1187,6 +1264,7 @@ export default function App() {
   const toggleDone = (si, id) => {
     const s = [...data.sprints];
     s[si] = { ...s[si], tasks: s[si].tasks.map(t => t.id === id ? { ...t, done: !t.done } : t) };
+    haptic(10);
     u({ sprints: s });
   };
 
@@ -1194,14 +1272,17 @@ export default function App() {
     const t = data.sprints[si].tasks.find(x => x.id === id); if (!t) return;
     const s = [...data.sprints];
     s[si] = { ...s[si], tasks: s[si].tasks.filter(x => x.id !== id) };
+    haptic([10, 30, 10]);
     u({ sprints: s, archiveTasks: [{ ...t, archivedAt: now() }, ...data.archiveTasks] });
   };
   const softArchiveSprint = (si) => {
     const sp = data.sprints[si];
+    haptic([10, 30, 10]);
     u({ sprints: data.sprints.filter((_, i) => i !== si), archiveSprints: [{ ...sp, archivedAt: now() }, ...data.archiveSprints] });
   };
   const softArchiveEpic = (id) => {
     const e = data.epics.find(x => x.id === id); if (!e) return;
+    haptic([10, 30, 10]);
     u({ epics: data.epics.filter(x => x.id !== id), archiveEpics: [{ ...e, archivedAt: now() }, ...data.archiveEpics] });
   };
 
@@ -1333,7 +1414,7 @@ export default function App() {
          Undo (влево), потом lang + theme (preferences). */}
       <UtilityCluster lang={lang} theme={theme} t={t} canUndo={canUndo} onUndo={doUndo}
         sort={data.sort}
-        onToggleSort={() => uPref({ sort: data.sort === "desc" ? "asc" : "desc" })}
+        onToggleSort={() => withTransition(() => uPref({ sort: data.sort === "desc" ? "asc" : "desc" }))}
         onToggleLang={() => uPref({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } })}
         onToggleTheme={() => {
           const eff = theme || "light";
@@ -1346,7 +1427,7 @@ export default function App() {
       {/* Filter bar (only if projects exist) */}
       {data.projects.length > 0 && (
         <FilterBar projects={data.projects} active={active} t={t}
-          onSelect={id => u({ activeProject: id })}
+          onSelect={id => withTransition(() => u({ activeProject: id }))}
           onOpenProjects={() => setModal({ type: "projects" })} />
       )}
 
@@ -1469,7 +1550,7 @@ export default function App() {
 
       {/* Archive */}
       <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 20 }}>
-        <button onClick={() => uPref({ ui: { ...data.ui, archiveOpen: !data.ui.archiveOpen } })}
+        <button onClick={() => withTransition(() => uPref({ ui: { ...data.ui, archiveOpen: !data.ui.archiveOpen } }))}
           style={{ ...B, fontWeight: 700, fontSize: 15, color: "var(--fg)" }}>
           {t("archive")} {data.ui.archiveOpen ? "▾" : "▸"}
           <span style={{ fontWeight: 400, fontSize: 12, color: "var(--fg-3)", marginLeft: 8 }}>{totalArc}</span>
