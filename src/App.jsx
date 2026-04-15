@@ -1514,7 +1514,7 @@ export default function App() {
         {data.projects.length === 0 && (
           <button onClick={() => setModal({ type: "projects" })} style={{ ...B, color: "var(--fg-3)", fontSize: 12, padding: "6px 0" }}>{t("projects").toLowerCase()}</button>
         )}
-        <button onClick={() => setModal({ type: "reset" })} style={{ ...B, color: "var(--fg-3)", fontSize: 12, padding: "6px 0" }}>{t("reset")}</button>
+        <button onClick={() => setModal({ type: "reset" })} className="del-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12, padding: "6px 0" }}>{t("reset")}</button>
       </div>
     </div>
   );
@@ -1560,7 +1560,9 @@ function UtilityCluster({ lang, theme, t, canUndo, onUndo, onToggleLang, onToggl
         className="util-btn"
         style={{
           fontSize: 14, lineHeight: 1,
-          opacity: canUndo ? undefined : 0.2,
+          // Когда доступно — чуть заметнее остальных (0.7) чтобы сигнализировать
+          // "это actionable прямо сейчас". Disabled — 0.2, почти невидимо.
+          opacity: canUndo ? 0.7 : 0.2,
           cursor: canUndo ? "pointer" : "default",
           marginRight: 6,
         }}>

@@ -9,6 +9,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="sdvg.io" />
     <meta name="theme-color" content="#fbfaf6" media="(prefers-color-scheme: light)" />
@@ -220,6 +221,12 @@
         .util-btn:hover { opacity: 1; background: var(--surface); }
       }
       .util-btn:focus-visible { opacity: 1; }
+
+      /* Destructive action — hover подсвечивается danger-red,
+         чтобы пользователь ощущал что это не обычный text-button. */
+      @media (hover: hover) {
+        .del-btn:hover { color: var(--danger) !important; }
+      }
 
       /* Action cluster (icon-btn, act-btn) внутри row: на desktop полупрозрачны до
          hover'а по строке → снижают визуальный шум без ухудшения discoverability.
