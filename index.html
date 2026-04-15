@@ -65,8 +65,10 @@
 
         --body-weight: 400;
 
-        /* +28px top на мобиле — clearance для floating utility cluster */
-        --pad: 50px 14px calc(56px + env(safe-area-inset-bottom));
+        /* Top padding на мобиле = clearance для floating utility cluster.
+           Cluster занимает top:8 + h:48 = 56px. Ставим 70px → 14px breathing room
+           между cluster'ом и первым элементом контента (FilterBar или Epics). */
+        --pad: 70px 14px calc(56px + env(safe-area-inset-bottom));
         --sprint-pad: 11px 12px;
         --modal-pad: 18px 14px;
         --modal-w: 100%;
@@ -226,7 +228,9 @@
         cursor: pointer;
         font-family: inherit;
         color: var(--fg-3);
-        opacity: 0.5;
+        /* 0.65 — чуть выше чем raw-subtle (0.5), но всё ещё ambient.
+           Даёт лучший contrast особенно в light theme поверх blurred backdrop. */
+        opacity: 0.65;
         padding: 6px 8px;
         min-width: 32px; min-height: 32px;
         border-radius: 5px;

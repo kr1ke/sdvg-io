@@ -1537,7 +1537,9 @@ function UtilityCluster({ lang, theme, t, canUndo, onUndo, sort, onToggleSort, o
         className="util-btn"
         style={{
           fontSize: 14, lineHeight: 1,
-          opacity: canUndo ? 0.7 : 0.2,
+          // Enabled 0.8 — заметнее остальных utility-кнопок (0.65),
+          // чтобы сигнализировать "это actionable прямо сейчас". Disabled 0.2.
+          opacity: canUndo ? 0.8 : 0.2,
           cursor: canUndo ? "pointer" : "default",
         }}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
