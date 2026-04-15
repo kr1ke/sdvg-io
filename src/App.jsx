@@ -39,7 +39,8 @@ const T = {
   en: {
     epics: "Epics", sprints: "Sprints", archive: "Archive", tasks: "Tasks", projects: "Projects",
     all: "All", noProject: "No project", none: "none", manageProjects: "manage projects",
-    addTask: "+ task", addSprint: "+ add sprint", addProject: "+ add project",
+    addTask: "+ task", addSprint: "+ sprint", addProject: "+ add project",
+    create: "create", forAllProjects: (n) => `for all ${n} projects`,
     newest: "newest", oldest: "oldest",
     open: "open", openCard: "open card", archiveAction: "archive", archiveTask: "archive task", archiveSprintAction: "archive sprint",
     settings: "settings", deleteForever: "delete forever", restore: "restore",
@@ -75,7 +76,8 @@ const T = {
   ru: {
     epics: "Эпики", sprints: "Спринты", archive: "Архив", tasks: "Задачи", projects: "Проекты",
     all: "Все", noProject: "Без проекта", none: "нет", manageProjects: "управление проектами",
-    addTask: "+ задача", addSprint: "+ добавить спринт", addProject: "+ добавить проект",
+    addTask: "+ задача", addSprint: "+ спринт", addProject: "+ добавить проект",
+    create: "создать", forAllProjects: (n) => `для всех ${n} проектов`,
     newest: "новые", oldest: "старые",
     open: "открыть", openCard: "открыть", archiveAction: "архив", archiveTask: "в архив", archiveSprintAction: "архив спринта",
     settings: "настройки", deleteForever: "удалить навсегда", restore: "восстановить",
@@ -118,8 +120,13 @@ const mkTask = (text = "", projectId = null) => ({
   id: uid(), text, desc: "", epicId: null, projectId, done: false, createdAt: now(),
 });
 const mkEpic = (projectId = null) => ({ id: uid(), text: "", projectId, createdAt: now() });
-const mkSprint = (n) => ({ id: uid(), name: `Week ${n}`, goal: "", desc: "", tasks: [], createdAt: now() });
-const mkProject = (name) => ({ id: uid(), name });
+const mkSprint = (name = "", goal = "") => ({ id: uid(), name, goal, desc: "", tasks: [], createdAt: now() });
+const mkProject = (name, color) => ({ id: uid(), name, color });
+
+// Палитра цветов для проектов. Каждый цвет используется как border/text/7%-bg
+// в pill-фильтре и tag'ах задач. Выбирается пользователем или автоматически
+// по модулю индекса (projects.length % COLORS.length).
+const COLORS = ["#6366f1", "#f59e0b", "#22c55e", "#ef4444", "#06b6d4", "#ec4899", "#8b5cf6", "#f97316"];
 
 const empty = {
   epics: [],
@@ -155,37 +162,36 @@ const seedDemo = () => {
   const pPersonal = "p_personal", pWork = "p_work", pStudy = "p_study";
   const eRefactor = "e_refactor", eRelease = "e_release", eCourse = "e_course";
   return {
-    // Тот же приём: для desc-display массив идёт от старого к новому.
+    // Natural storage order = newest first. sortArr с desc отображает как есть,
+    // с asc реверсит. Никаких compensating-трюков не нужно.
     epics: [
-      { id: eRefactor, text: "Рефакторинг auth-флоу", projectId: pWork, createdAt: D(12) },
-      { id: eRelease, text: "Подготовка релиза v2", projectId: pWork, createdAt: D(6) },
       { id: eCourse, text: "Курс по системному дизайну", projectId: pStudy, createdAt: D(3) },
+      { id: eRelease, text: "Подготовка релиза v2", projectId: pWork, createdAt: D(6) },
+      { id: eRefactor, text: "Рефакторинг auth-флоу", projectId: pWork, createdAt: D(12) },
     ],
-    // Порядок намеренно "снизу вверх": sortArr с desc делает .reverse(),
-    // и при desc-отображении пользователь видит Эта неделя → Следующая → Бэклог.
     sprints: [
-      { id: "s_back", name: "Бэклог", goal: "Идеи и задачи без срока", desc: "", createdAt: D(20), tasks: [
-        { id: "t10", text: "Прочитать «Designing Data-Intensive Applications»", desc: "", epicId: eCourse, projectId: pStudy, done: false, createdAt: D(20) },
-        { id: "t11", text: "Перевести pet-проект на TypeScript", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(15) },
+      { id: "s_this", name: "Эта неделя", goal: "Закрыть критичные для релиза задачи", desc: "", createdAt: D(2), tasks: [
+        { id: "t6", text: "Обновить резюме под новую вакансию", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(0, 3) },
+        { id: "t5", text: "Заказать продукты на неделю", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(0, 8) },
+        { id: "t4", text: "Дописать раздел про consensus-протоколы", desc: "Raft + Paxos\nдомашка к лекции 4", epicId: eCourse, projectId: pStudy, done: false, createdAt: D(1, 2) },
+        { id: "t3", text: "Code review PR #428 (новый rate-limiter)", desc: "", epicId: null, projectId: pWork, done: false, createdAt: D(1, 6) },
+        { id: "t2", text: "Накатить миграцию users.email_verified", desc: "", epicId: eRelease, projectId: pWork, done: true,  createdAt: D(2, 2) },
+        { id: "t1", text: "Починить race condition в обновлении токена", desc: "", epicId: eRefactor, projectId: pWork, done: true,  createdAt: D(2, 4) },
       ]},
       { id: "s_next", name: "Следующая неделя", goal: "", desc: "", createdAt: D(1), tasks: [
-        { id: "t7", text: "Презентация архитектуры на ревью команды", desc: "", epicId: eRelease, projectId: pWork, done: false, createdAt: D(1) },
-        { id: "t8", text: "Разобрать backlog багов из Sentry", desc: "приоритизировать P0/P1", epicId: null, projectId: pWork, done: false, createdAt: D(1) },
         { id: "t9", text: "Записаться к стоматологу", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(1) },
+        { id: "t8", text: "Разобрать backlog багов из Sentry", desc: "приоритизировать P0/P1", epicId: null, projectId: pWork, done: false, createdAt: D(1) },
+        { id: "t7", text: "Презентация архитектуры на ревью команды", desc: "", epicId: eRelease, projectId: pWork, done: false, createdAt: D(1) },
       ]},
-      { id: "s_this", name: "Эта неделя", goal: "Закрыть критичные для релиза задачи", desc: "", createdAt: D(2), tasks: [
-        { id: "t1", text: "Починить race condition в обновлении токена", desc: "", epicId: eRefactor, projectId: pWork, done: true,  createdAt: D(2, 4) },
-        { id: "t2", text: "Накатить миграцию users.email_verified", desc: "", epicId: eRelease, projectId: pWork, done: true,  createdAt: D(2, 2) },
-        { id: "t3", text: "Code review PR #428 (новый rate-limiter)", desc: "", epicId: null, projectId: pWork, done: false, createdAt: D(1, 6) },
-        { id: "t4", text: "Дописать раздел про consensus-протоколы", desc: "Raft + Paxos\nдомашка к лекции 4", epicId: eCourse, projectId: pStudy, done: false, createdAt: D(1, 2) },
-        { id: "t5", text: "Заказать продукты на неделю", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(0, 8) },
-        { id: "t6", text: "Обновить резюме под новую вакансию", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(0, 3) },
+      { id: "s_back", name: "Бэклог", goal: "Идеи и задачи без срока", desc: "", createdAt: D(20), tasks: [
+        { id: "t11", text: "Перевести pet-проект на TypeScript", desc: "", epicId: null, projectId: pPersonal, done: false, createdAt: D(15) },
+        { id: "t10", text: "Прочитать «Designing Data-Intensive Applications»", desc: "", epicId: eCourse, projectId: pStudy, done: false, createdAt: D(20) },
       ]},
     ],
     projects: [
-      { id: pWork, name: "Работа" },
-      { id: pPersonal, name: "Личное" },
-      { id: pStudy, name: "Учёба" },
+      { id: pWork, name: "Работа", color: COLORS[0] },
+      { id: pPersonal, name: "Личное", color: COLORS[1] },
+      { id: pStudy, name: "Учёба", color: COLORS[2] },
     ],
     archiveTasks: [
       { id: "ta1", text: "Хотфикс: фикс отображения статуса в админке", desc: "", epicId: null, projectId: pWork, done: true, createdAt: D(8), archivedAt: D(7) },
@@ -193,8 +199,8 @@ const seedDemo = () => {
     ],
     archiveSprints: [
       { id: "sa1", name: "Прошлая неделя", goal: "Завершить онбординг", desc: "", createdAt: D(14), archivedAt: D(7), tasks: [
-        { id: "ta_s1", text: "Настроить локальное окружение", desc: "", epicId: null, projectId: pWork, done: true, createdAt: D(14) },
         { id: "ta_s2", text: "Прочитать internal docs", desc: "", epicId: null, projectId: pWork, done: true, createdAt: D(13) },
+        { id: "ta_s1", text: "Настроить локальное окружение", desc: "", epicId: null, projectId: pWork, done: true, createdAt: D(14) },
       ]},
     ],
     archiveEpics: [],
@@ -212,7 +218,8 @@ const migrate = (raw) => {
     ...raw,
     sort: { ...empty.sort, ...(raw.sort || {}) },
     ui: { ...empty.ui, ...(raw.ui || {}) },
-    projects: raw.projects || [],
+    // Проекты без color (до v2-апдейта) получают цвет по индексу из палитры.
+    projects: (raw.projects || []).map((p, i) => ({ color: COLORS[i % COLORS.length], ...p })),
     epics: (raw.epics || []).map(e => ({ projectId: null, createdAt: 0, ...e })),
     sprints: (raw.sprints || []).map(s => ({ createdAt: 0, ...s, tasks: (s.tasks || []).map(t => ({ projectId: null, ...t })) })),
     archiveEpics: (raw.archiveEpics || []).map(e => ({ projectId: null, ...e })),
@@ -223,15 +230,19 @@ const migrate = (raw) => {
 function useStore() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Undo stack: до 30 предыдущих состояний, в памяти (не персистентно).
+  // Reload обнуляет. Каждый save() кладёт prev в стек (если не skipUndo).
+  const undoStack = useRef([]);
+  const MAX_UNDO = 30;
+  const [canUndo, setCanUndo] = useState(false);
+
   useEffect(() => {
     (async () => {
       try {
         const r = await window.storage.get(KEY);
         const stored = r ? migrate(JSON.parse(r.value)) : null;
-        // Условие seed'а: либо ключа нет (первый запуск), либо данные есть, но они
-        // полностью пусты И не было явного reset'а — значит мы потеряли данные
-        // (новый ключ, корраптнутый storage, и т.п.). Reset кладёт wasReset:true,
-        // что блокирует авто-seed и оставляет настоящий empty state.
+        // Seed условие: либо ключа нет, либо данные пусты И не было reset'а.
+        // Reset кладёт wasReset:true → блокирует автовозврат демо.
         if (!stored || (isEssentiallyEmpty(stored) && !stored.wasReset)) {
           const seed = seedDemo();
           setData(seed);
@@ -245,11 +256,31 @@ function useStore() {
       setLoading(false);
     })();
   }, []);
-  const save = useCallback(async (n) => {
-    setData(n);
-    try { await window.storage.set(KEY, JSON.stringify(n)); } catch {}
+
+  const save = useCallback(async (next, opts = {}) => {
+    setData(prev => {
+      if (prev && !opts.skipUndo) {
+        const stack = undoStack.current;
+        stack.push(prev);
+        if (stack.length > MAX_UNDO) stack.shift();
+        setCanUndo(stack.length > 0);
+      }
+      return next;
+    });
+    try { await window.storage.set(KEY, JSON.stringify(next)); } catch {}
   }, []);
-  return { data, loading, save };
+
+  const undo = useCallback(async () => {
+    const stack = undoStack.current;
+    if (stack.length === 0) return null;
+    const prev = stack.pop();
+    setCanUndo(stack.length > 0);
+    setData(prev);
+    try { await window.storage.set(KEY, JSON.stringify(prev)); } catch {}
+    return prev;
+  }, []);
+
+  return { data, loading, save, undo, canUndo };
 }
 
 function useNarrow(threshold = 600) {
@@ -343,8 +374,9 @@ function Select({ value, onChange, options, placeholder = "—", disabled = fals
   );
 }
 
-/* ── Checkbox ── */
-function Checkbox({ checked, onChange, size = 16 }) {
+/* ── Circle checkbox: круг 20px, 2px border, зелёная заливка + SVG-галочка.
+   Hover масштабируется x1.15 и обводка подсвечивается зелёным (CSS .circle). */
+function Checkbox({ checked, onChange, size = 20 }) {
   const prev = useRef(checked);
   const [pulse, setPulse] = useState(false);
   useEffect(() => {
@@ -356,41 +388,126 @@ function Checkbox({ checked, onChange, size = 16 }) {
       onClick={onChange}
       role="checkbox"
       aria-checked={checked}
-      className={pulse ? "cb-pulse" : undefined}
+      className={"circle" + (pulse ? " cb-pulse" : "")}
       style={{
         all: "unset", boxSizing: "border-box",
         width: size, height: size, flexShrink: 0,
-        border: `1.5px solid ${checked ? "var(--accent)" : "var(--line-2)"}`,
-        borderRadius: 3,
+        border: `2px solid ${checked ? "var(--accent)" : "var(--line-2)"}`,
+        borderRadius: "50%",
         background: checked ? "var(--accent)" : "transparent",
         cursor: "pointer", display: "inline-flex",
         alignItems: "center", justifyContent: "center",
-        transition: "background var(--fast) ease-out, border-color var(--fast) ease-out",
+        transition: "background var(--fast) ease-out, border-color var(--fast) ease-out, transform var(--fast) ease-out",
       }}
     >
-      {checked && <span style={{ color: "var(--accent-ink)", fontSize: 11, fontWeight: 800, lineHeight: 1 }}>✓</span>}
+      {checked && (
+        <svg width={size * 0.55} height={size * 0.55} viewBox="0 0 12 12" fill="none">
+          <path d="M2.5 6 L5 8.5 L9.5 3.5" stroke="var(--accent-ink)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
     </button>
   );
 }
 
-/* ── Pill (project / epic tag) ── */
-function Pill({ children, color = "project" }) {
-  const palette = {
-    project: { border: "var(--pill-border)", text: "var(--pill-fg)", bg: "transparent" },
-    epic: { border: "transparent", text: "var(--fg-3)", bg: "transparent" },
-  }[color];
+/* ── Progress bar: полоска 40×3px + текст "{done}/{total}".
+   Indigo (brand) при <100%, зелёная (accent) при 100%. */
+function Progress({ done, total }) {
+  if (total === 0) return null;
+  const pct = Math.min(100, Math.round((done / total) * 100));
+  const complete = pct === 100;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span style={{ width: 40, height: 3, borderRadius: 2, background: "var(--line)", overflow: "hidden", display: "inline-block" }}>
+        <span style={{
+          display: "block", height: "100%",
+          width: `${pct}%`,
+          background: complete ? "var(--accent)" : "var(--pill-fg)",
+          borderRadius: 2,
+          transition: "width var(--med) var(--ease-out-quart), background var(--fast) ease-out",
+        }} />
+      </span>
+      <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{done}/{total}</span>
+    </span>
+  );
+}
+
+/* ── Inline sprint creation form.
+   Открывается по "+" в Sprints. Поля: name (autofocus), goal.
+   Кнопки: create, "for all N projects" (если >1), cancel.
+   Enter → create (с пустым goal если не заполнен), Escape → cancel. */
+function NewSprintForm({ projects, defaultName, t, onCreate, onCreateForAll, onCancel }) {
+  const [name, setName] = useState(defaultName || "");
+  const [goal, setGoal] = useState("");
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) { ref.current.focus(); ref.current.select(); } }, []);
+  const submit = () => { if (!name.trim()) return; onCreate(name.trim(), goal.trim()); };
+  const submitAll = () => { if (!name.trim()) return; onCreateForAll(name.trim(), goal.trim()); };
+  const onKey = e => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); };
+  return (
+    <div style={{
+      marginBottom: 14, padding: 14,
+      background: "var(--surface)",
+      border: "1.5px dashed var(--line-2)",
+      borderRadius: 8,
+    }}>
+      <input
+        ref={ref} value={name} onChange={e => setName(e.target.value)} onKeyDown={onKey}
+        placeholder={t("name")}
+        style={{
+          all: "unset", font: "inherit", fontSize: 14,
+          width: "100%", borderBottom: "1.5px solid var(--fg-4)",
+          color: "var(--fg)", paddingBottom: 4, marginBottom: 10, boxSizing: "border-box",
+        }} />
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
+        <span style={{ fontSize: 11, color: "var(--fg-4)", flexShrink: 0 }}>{t("goal").toLowerCase()}</span>
+        <input
+          value={goal} onChange={e => setGoal(e.target.value)} onKeyDown={onKey}
+          placeholder={t("sprintGoalPlaceholder")}
+          style={{
+            all: "unset", font: "inherit", fontSize: 13,
+            flex: 1, borderBottom: "1.5px solid var(--fg-5)",
+            color: "var(--fg)", paddingBottom: 2, boxSizing: "border-box",
+          }} />
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button onClick={submit} style={{
+          all: "unset", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600,
+          color: "var(--active-fg)", background: "var(--active-bg)",
+          padding: "8px 16px", borderRadius: 5,
+        }}>{t("create") || "create"}</button>
+        {projects.length > 1 && (
+          <button onClick={submitAll} style={{
+            all: "unset", cursor: "pointer", fontFamily: "inherit", fontSize: 12,
+            color: "var(--fg-3)", padding: "8px 10px",
+          }}>{t("forAllProjects", projects.length)}</button>
+        )}
+        <button onClick={onCancel} style={{
+          all: "unset", cursor: "pointer", fontFamily: "inherit", fontSize: 13,
+          color: "var(--fg-3)", padding: "8px 10px",
+        }}>{t("cancel")}</button>
+      </div>
+    </div>
+  );
+}
+
+/* ── ProjectTag — pill с цветом конкретного проекта.
+   Цвет текста = project.color, фон = color + 12 (7% opacity в hex),
+   без border — чистый цветной tint. */
+function ProjectTag({ project }) {
+  if (!project) return null;
+  const c = project.color || "#6366f1";
   return (
     <span style={{
       display: "inline-block",
       fontSize: 10, fontFamily: "inherit",
-      border: `1px solid ${palette.border}`,
-      color: palette.text,
-      background: palette.bg,
-      padding: color === "project" ? "1px 6px" : 0,
+      color: c,
+      background: `${c}1f`,
+      padding: "1px 6px",
       borderRadius: 3,
       whiteSpace: "nowrap",
       lineHeight: 1.4,
-    }}>{children}</span>
+      fontWeight: 500,
+    }}>{project.name}</span>
   );
 }
 
@@ -440,7 +557,9 @@ const matchesProject = (item, active) => {
   if (active === "none") return !item.projectId;
   return item.projectId === active;
 };
-const sortArr = (arr, dir) => dir === "desc" ? [...arr].slice().reverse() : arr;
+// Данные хранятся в newest-first порядке (prepend при создании).
+// desc = показывать как есть, asc = реверсить (oldest first).
+const sortArr = (arr, dir) => dir === "asc" ? [...arr].reverse() : arr;
 
 /* ── Sheet wrapper.
    Desktop: centered modal (current behaviour, anim-box slide-up).
@@ -481,27 +600,60 @@ function Sheet({ children, onClose }) {
 }
 
 /* ── Task Modal ── */
-function TaskModal({ task, allEpics, projects, sprints, onUpdate, onClose, onMove, readOnly = false, t, lang }) {
+function TaskModal({ task, allEpics, projects, sprints, onUpdate, onDelete, onClose, onMove, readOnly = false, t, lang }) {
+  const [text, setText] = useState(task.text || "");
   const [desc, setDesc] = useState(task.desc || "");
   const [epicId, setEpicId] = useState(task.epicId || "");
   const [projectId, setProjectId] = useState(task.projectId || "");
+  const titleRef = useRef(null);
+  // Модалка была открыта на свежесозданной задаче если title изначально пустой.
+  // Тогда cancel удаляет task (не оставлять мусор), save с пустым — тоже удаляет.
+  const wasEmpty = !task.text;
+  useEffect(() => {
+    if (wasEmpty && titleRef.current) { titleRef.current.focus(); titleRef.current.select?.(); }
+  }, []);
   const save = () => {
-    if (!readOnly) onUpdate({ ...task, desc, epicId: epicId || null, projectId: projectId || null });
+    const finalText = text.trim();
+    if (!readOnly) {
+      if (!finalText && onDelete) { onDelete(); onClose(); return; }
+      onUpdate({ ...task, text: finalText, desc, epicId: epicId || null, projectId: projectId || null });
+    }
+    onClose();
+  };
+  const cancel = () => {
+    if (wasEmpty && !text.trim() && onDelete) onDelete();
     onClose();
   };
   const epicOpts = [{ value: "", label: t("none") }, ...allEpics.map(e => ({ value: e.id, label: e.text || t("untitled") }))];
   const projOpts = [{ value: "", label: t("noProject") }, ...projects.map(p => ({ value: p.id, label: p.name }))];
   const sprintOpts = sprints.map(s => ({ value: s.id, label: s.name }));
   return (
-    <Sheet onClose={onClose}>
+    <Sheet onClose={cancel}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 6, gap: 8 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)", flex: 1, minWidth: 0, lineHeight: 1.35, wordBreak: "break-word" }}>
-            {task.text || t("untitled")}
-            {task.done && <span style={{ fontSize: 11, color: "var(--accent)", marginLeft: 8, fontWeight: 500 }}>{t("done")}</span>}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {readOnly ? (
+              <div style={{ fontSize: 16, fontWeight: 600, color: "var(--fg)", lineHeight: 1.35, wordBreak: "break-word" }}>
+                {task.text || t("untitled")}
+                {task.done && <span style={{ fontSize: 11, color: "var(--accent)", marginLeft: 8, fontWeight: 500 }}>{t("done")}</span>}
+              </div>
+            ) : (
+              <input
+                ref={titleRef}
+                value={text} onChange={e => setText(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") cancel(); }}
+                placeholder={t("newTask")}
+                style={{
+                  all: "unset", font: "inherit", fontSize: 16, fontWeight: 600,
+                  width: "100%", color: "var(--fg)",
+                  borderBottom: "1.5px solid var(--fg-4)",
+                  paddingBottom: 4,
+                }} />
+            )}
+            {!readOnly && task.done && <span style={{ fontSize: 11, color: "var(--accent)", marginLeft: 0, marginTop: 6, fontWeight: 500, display: "inline-block" }}>{t("done")}</span>}
           </div>
-          <button onClick={onClose} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18, flexShrink: 0 }}>×</button>
+          <button onClick={cancel} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18, flexShrink: 0 }}>×</button>
         </div>
-        <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 20, fontStyle: "italic" }}>
+        <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 20, marginTop: 8, fontStyle: "italic" }}>
           {t("created")} {fmt(task.createdAt, lang)} · {rel(task.createdAt, lang)} {t("ago")}
         </div>
 
@@ -528,7 +680,7 @@ function TaskModal({ task, allEpics, projects, sprints, onUpdate, onClose, onMov
           placeholder={t("notesPlaceholder")} rows={7} style={O.textarea} />
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
-          <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          <button onClick={cancel} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
           {!readOnly && <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
         </div>
     </Sheet>
@@ -564,24 +716,37 @@ function SprintModal({ sprint, onUpdate, onClose, t }) {
 }
 
 /* ── Epic Modal ── */
-function EpicModal({ epic, allTasks, projects, onUpdate, onClose, onOpenTask, readOnly = false, t }) {
+function EpicModal({ epic, allTasks, projects, onUpdate, onDelete, onClose, onOpenTask, readOnly = false, t }) {
   const [text, setText] = useState(epic.text || "");
   const [projectId, setProjectId] = useState(epic.projectId || "");
   const linked = allTasks.filter(x => x.epicId === epic.id);
-  const save = () => { if (!readOnly) onUpdate({ ...epic, text, projectId: projectId || null }); onClose(); };
+  const wasEmpty = !epic.text;
+  const save = () => {
+    const finalText = text.trim();
+    if (!readOnly) {
+      if (!finalText && onDelete) { onDelete(); onClose(); return; }
+      onUpdate({ ...epic, text: finalText, projectId: projectId || null });
+    }
+    onClose();
+  };
+  const cancel = () => {
+    if (wasEmpty && !text.trim() && onDelete) onDelete();
+    onClose();
+  };
   const projOpts = [{ value: "", label: t("noProject") }, ...projects.map(p => ({ value: p.id, label: p.name }))];
   return (
-    <Sheet onClose={onClose}>
+    <Sheet onClose={cancel}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16, gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <label style={O.label}>{t("epicName")}</label>
             {readOnly
               ? <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)", wordBreak: "break-word" }}>{epic.text}</div>
               : <input autoFocus={!epic.text} value={text} onChange={e => setText(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") cancel(); }}
                   style={{ all: "unset", font: "inherit", fontSize: 16, fontWeight: 700, width: "100%", borderBottom: "1.5px solid var(--fg-3)", color: "var(--fg)" }} />
             }
           </div>
-          <button onClick={onClose} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18, flexShrink: 0 }}>×</button>
+          <button onClick={cancel} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18, flexShrink: 0 }}>×</button>
         </div>
 
         <div style={{ marginBottom: 16 }}>
@@ -602,7 +767,7 @@ function EpicModal({ epic, allTasks, projects, onUpdate, onClose, onOpenTask, re
         ))}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 22 }}>
-          <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          <button onClick={cancel} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
           {!readOnly && <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
         </div>
     </Sheet>
@@ -610,7 +775,7 @@ function EpicModal({ epic, allTasks, projects, onUpdate, onClose, onOpenTask, re
 }
 
 /* ── Projects Modal ── */
-function ProjectsModal({ projects, onAdd, onRename, onDelete, onClose, t }) {
+function ProjectsModal({ projects, onAdd, onRename, onRecolor, onDelete, onClose, t }) {
   return (
     <Sheet onClose={onClose}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16 }}>
@@ -623,15 +788,28 @@ function ProjectsModal({ projects, onAdd, onRename, onDelete, onClose, t }) {
           </div>
         )}
         {projects.map(p => (
-          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
-            <span style={{ color: "var(--fg-4)" }}>–</span>
-            <div style={{ flex: 1 }}>
-              <Inline value={p.name} onSave={name => onRename(p.id, name)} placeholder={t("projectName")} />
+          <div key={p.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--line)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <span style={{ width: 10, height: 10, borderRadius: "50%", background: p.color || COLORS[0], flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Inline value={p.name} onSave={name => onRename(p.id, name)} placeholder={t("projectName")} />
+              </div>
+              <button onClick={() => onDelete(p.id)} title="delete project" className="icon-btn" style={{ ...B, color: "var(--fg-4)", fontSize: 13 }}>×</button>
             </div>
-            <button onClick={() => onDelete(p.id)} title="delete project" className="icon-btn" style={{ ...B, color: "var(--fg-4)", fontSize: 13 }}>×</button>
+            <div style={{ display: "flex", gap: 7, marginLeft: 20 }}>
+              {COLORS.map(c => (
+                <span key={c} onClick={() => onRecolor(p.id, c)} style={{
+                  width: 20, height: 20, borderRadius: "50%",
+                  background: c, cursor: "pointer",
+                  outline: (p.color || COLORS[0]) === c ? "2px solid var(--fg)" : "none",
+                  outlineOffset: 2,
+                  transition: "outline 120ms",
+                }} />
+              ))}
+            </div>
           </div>
         ))}
-        <button onClick={onAdd} style={ADD}>{t("addProject")}</button>
+        <button onClick={onAdd} style={{ ...ADD, marginTop: 12 }}>{t("addProject")}</button>
         <div style={{ fontSize: 11, color: "var(--fg-3)", marginTop: 18, lineHeight: 1.5 }}>
           {t("deleteProjectHint")}
         </div>
@@ -676,21 +854,24 @@ function ResetModal({ onConfirm, onClose, t }) {
 /* ── Project filter bar ── */
 function FilterBar({ projects, active, onSelect, onOpenProjects, t }) {
   const items = [
-    { key: null, label: t("all") },
-    ...projects.map(p => ({ key: p.id, label: p.name })),
-    ...(projects.length > 0 ? [{ key: "none", label: t("noProject") }] : []),
+    { key: null, label: t("all"), color: null },
+    ...projects.map(p => ({ key: p.id, label: p.name, color: p.color })),
+    ...(projects.length > 0 ? [{ key: "none", label: t("noProject"), color: null }] : []),
   ];
   return (
     <div className="pill-row">
       {items.map(it => {
         const on = active === it.key;
+        // Активный project-pill заливается его цветом (белый текст); All/Unassigned — нейтрально.
+        const activeBg = it.color || "var(--active-bg)";
+        const activeFg = it.color ? "#fff" : "var(--active-fg)";
         return (
           <button key={String(it.key)} onClick={() => onSelect(it.key)} style={{
             all: "unset", cursor: "pointer", fontFamily: "inherit", fontSize: 12,
             padding: "7px 13px", borderRadius: 14, whiteSpace: "nowrap",
-            border: on ? "1px solid var(--active-bg)" : "1px solid var(--line)",
-            background: on ? "var(--active-bg)" : "var(--panel)",
-            color: on ? "var(--active-fg)" : "var(--fg-2)",
+            border: on ? `1px solid ${activeBg}` : "1px solid var(--line)",
+            background: on ? activeBg : "var(--panel)",
+            color: on ? activeFg : "var(--fg-2)",
             transition: "background var(--fast) ease-out, color var(--fast) ease-out, border-color var(--fast) ease-out",
           }}>{it.label}</button>
         );
@@ -766,18 +947,17 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
         <div style={{ paddingTop: 3, ...dim }}>
           <Checkbox checked={task.done} onChange={() => onToggleDone(task.id)} />
         </div>
-        <div style={{ flex: 1, minWidth: 0, ...dim }}>
+        <div onClick={() => onOpen(task)} style={{ flex: 1, minWidth: 0, cursor: "pointer", ...dim }}>
           <div style={{
             ...(task.done ? { textDecoration: "line-through", color: "var(--fg-3)" } : {}),
             overflow: "hidden", textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}>
-            <Inline value={task.text} onSave={txt => onUpdate({ ...task, text: txt })} placeholder={t("newTask")}
-              style={task.done ? { color: "var(--fg-3)" } : {}} />
+            {task.text || <span style={{ color: "var(--fg-4)", fontStyle: "italic" }}>{t("newTask")}</span>}
           </div>
           {hasMeta && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 11, color: "var(--fg-3)" }}>
-              {pr && <Pill>{pr.name}</Pill>}
+              {pr && <ProjectTag project={pr} />}
               {ep && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>#{ep.text}</span>}
               <span style={{ flex: 1 }} />
               <span style={{ fontStyle: "italic", color: "var(--fg-4)" }}>{rel(task.createdAt, lang)}</span>
@@ -797,27 +977,26 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
   const hasMeta = ep || pr;
   const dim = task.done ? { opacity: 0.55 } : null;
   return (
-    <div style={{
+    <div className="row" style={{
       display: "flex", alignItems: "flex-start", gap: 8,
       paddingTop: 3, marginBottom: 2,
     }} data-task-id={task.id}>
       <div style={{ paddingTop: 4, flexShrink: 0, ...dim }}>
         <Checkbox checked={task.done} onChange={() => onToggleDone(task.id)} />
       </div>
-      <div style={{ flex: 1, minWidth: 0, ...dim }}>
+      <div onClick={() => onOpen(task)} style={{ flex: 1, minWidth: 0, cursor: "pointer", ...dim }}>
         <div style={task.done ? { textDecoration: "line-through", color: "var(--fg-3)" } : {}}>
-          <Inline value={task.text} onSave={txt => onUpdate({ ...task, text: txt })} placeholder={t("newTask")}
-            style={task.done ? { color: "var(--fg-3)" } : {}} />
+          {task.text || <span style={{ color: "var(--fg-4)", fontStyle: "italic" }}>{t("newTask")}</span>}
         </div>
         {hasMeta && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 11, color: "var(--fg-3)" }}>
-            {pr && <Pill>{pr.name}</Pill>}
+            {pr && <ProjectTag project={pr} />}
             {ep && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>#{ep.text}</span>}
           </div>
         )}
       </div>
       <span style={{ fontSize: 10, color: "var(--fg-4)", fontStyle: "italic", marginRight: 2, paddingTop: 5, flexShrink: 0 }}>{rel(task.createdAt, lang)}</span>
-      <div style={{ paddingTop: 1, flexShrink: 0 }}>{actions}</div>
+      <div className="row-actions" style={{ paddingTop: 1, flexShrink: 0 }}>{actions}</div>
     </div>
   );
 }
@@ -843,8 +1022,6 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
                 {e.text || t("untitled")}
               </span>
               {!narrow && <span style={{ fontSize: 10, color: "var(--fg-4)", fontStyle: "italic" }}>{fmt(e.archivedAt, lang)}</span>}
-              <button onClick={() => u({ archiveEpics: data.archiveEpics.filter((_, i) => i !== idx) })}
-                title={t("deleteForever")} className="icon-btn" style={{ ...B, color: "var(--danger-soft)", fontSize: 13 }}>×</button>
             </div>
           ))}
         </div>
@@ -863,8 +1040,6 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
                 {!narrow && <span style={{ flex: 1 }} />}
                 <span style={{ fontSize: 10, color: "var(--fg-3)", flexShrink: 0 }}>{sp.tasks.length}</span>
                 {!narrow && <><Sep /><span style={{ fontSize: 10, color: "var(--fg-4)", fontStyle: "italic" }}>{fmt(sp.archivedAt, lang)}</span></>}
-                <button onClick={() => u({ archiveSprints: data.archiveSprints.filter((_, i) => i !== idx) })}
-                  title={t("deleteForever")} className="icon-btn" style={{ ...B, color: "var(--danger-soft)", fontSize: 13 }}>×</button>
               </div>
               {exp[sp.id] && sp.tasks.map(tk => {
                 const ep = allEpics.find(e => e.id === tk.epicId);
@@ -875,7 +1050,7 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
                     <span style={{ color: tk.done ? "var(--accent)" : "var(--fg-4)" }}>{tk.done ? "✓" : "○"}</span>
                     <span style={tk.done ? { textDecoration: "line-through" } : {}}>{tk.text || t("untitled")}</span>
                     {ep && <span style={{ fontSize: 10, color: "var(--fg-3)" }}>#{ep.text}</span>}
-                    {pr && <Pill>{pr.name}</Pill>}
+                    {pr && <ProjectTag project={pr} />}
                   </div>
                 );
               })}
@@ -898,14 +1073,12 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
                     <div style={{ textDecoration: "line-through", color: "var(--fg-3)", fontSize: 13, ...truncTitle, cursor: "pointer" }}
                          onClick={() => openTask(tk, "archiveTask")}>{tk.text || t("untitled")}</div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, fontSize: 10, color: "var(--fg-4)" }}>
-                      {pr && <Pill>{pr.name}</Pill>}
+                      {pr && <ProjectTag project={pr} />}
                       {ep && <span style={{ ...truncTitle, maxWidth: "40%" }}>#{ep.text}</span>}
                       <span style={{ flex: 1 }} />
                       <span style={{ fontStyle: "italic" }}>{fmt(tk.archivedAt, lang)}</span>
                     </div>
                   </div>
-                  <button onClick={() => u({ archiveTasks: data.archiveTasks.filter((_, i) => i !== idx) })}
-                    title={t("deleteForever")} className="icon-btn" style={{ ...B, color: "var(--danger-soft)", fontSize: 13 }}>×</button>
                 </div>
               );
             }
@@ -917,11 +1090,9 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
                   {tk.text || t("untitled")}
                 </span>
                 {ep && <span style={{ fontSize: 10, color: "var(--fg-3)" }}>#{ep.text}</span>}
-                {pr && <Pill>{pr.name}</Pill>}
+                {pr && <ProjectTag project={pr} />}
                 <Sep />
                 <span style={{ fontSize: 10, color: "var(--fg-4)", fontStyle: "italic" }}>{fmt(tk.archivedAt, lang)}</span>
-                <button onClick={() => u({ archiveTasks: data.archiveTasks.filter((_, i) => i !== idx) })}
-                  title={t("deleteForever")} className="icon-btn" style={{ ...B, color: "var(--danger-soft)", fontSize: 13 }}>×</button>
               </div>
             );
           })}
@@ -937,8 +1108,10 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
 
 /* ── Main ── */
 export default function App() {
-  const { data, loading, save } = useStore();
+  const { data, loading, save, undo, canUndo } = useStore();
   const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [showNewSprint, setShowNewSprint] = useState(false);
   const narrow = useNarrow();
   const lang = data?.ui?.lang || "en";
   const t = useMemo(() => tFn(lang), [lang]);
@@ -962,6 +1135,35 @@ export default function App() {
     document.documentElement.setAttribute("lang", lang);
   }, [lang]);
 
+  // Toast auto-dismiss после 2 секунд
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 2000);
+    return () => clearTimeout(id);
+  }, [toast]);
+
+  // Undo handler — выставляет toast с labelом действия
+  const doUndo = useCallback(async () => {
+    const prev = await undo();
+    if (prev) setToast({ type: "undo", text: lang === "ru" ? "Отменено" : "Undone" });
+  }, [undo, lang]);
+
+  // Cmd/Ctrl+Z глобально, НО не перехватываем когда фокус в input/textarea —
+  // там должен работать native-undo браузера для текста в поле.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        const el = document.activeElement;
+        const tag = el?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+        e.preventDefault();
+        doUndo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [doUndo]);
+
   // Scroll-to-new: после добавления сущности фокусируемся на ней.
   // Ждём rAF чтобы DOM успел отрендериться, потом scrollIntoView.
   const [scrollTarget, setScrollTarget] = useState(null);
@@ -978,6 +1180,8 @@ export default function App() {
   if (loading) return <div style={{ padding: 40, fontFamily: "monospace", color: "var(--fg-2)" }}>...</div>;
   if (!data) return null;
   const u = (p) => save({ ...data, ...p });
+  // Preference-changes (theme, lang, sort, archive expand) не засоряют undo-стек.
+  const uPref = (p) => save({ ...data, ...p }, { skipUndo: true });
   const active = data.activeProject;
 
   const visibleSprints = sortArr(data.sprints, data.sort.sprints);
@@ -1026,20 +1230,21 @@ export default function App() {
   const restoreTask = idx => {
     const { archivedAt, ...task } = data.archiveTasks[idx];
     if (data.sprints.length === 0) {
-      const sp = { ...mkSprint(1), name: t("backlog"), tasks: [task] };
+      const sp = { ...mkSprint(t("backlog")), tasks: [task] };
       u({ archiveTasks: data.archiveTasks.filter((_, i) => i !== idx), sprints: [sp] });
     } else {
-      const s = [...data.sprints]; s[0] = { ...s[0], tasks: [...s[0].tasks, task] };
+      // Prepend в первый спринт (верхний в списке)
+      const s = [...data.sprints]; s[0] = { ...s[0], tasks: [task, ...s[0].tasks] };
       u({ archiveTasks: data.archiveTasks.filter((_, i) => i !== idx), sprints: s });
     }
   };
   const restoreSprint = idx => {
     const { archivedAt, ...sprint } = data.archiveSprints[idx];
-    u({ archiveSprints: data.archiveSprints.filter((_, i) => i !== idx), sprints: [...data.sprints, sprint] });
+    u({ archiveSprints: data.archiveSprints.filter((_, i) => i !== idx), sprints: [sprint, ...data.sprints] });
   };
   const restoreEpic = idx => {
     const { archivedAt, ...epic } = data.archiveEpics[idx];
-    u({ archiveEpics: data.archiveEpics.filter((_, i) => i !== idx), epics: [...data.epics, epic] });
+    u({ archiveEpics: data.archiveEpics.filter((_, i) => i !== idx), epics: [epic, ...data.epics] });
   };
 
   const moveTask = (taskId, fromIdx, toSprintId) => {
@@ -1047,7 +1252,8 @@ export default function App() {
     const task = s[fromIdx].tasks.find(x => x.id === taskId); if (!task) return;
     s[fromIdx] = { ...s[fromIdx], tasks: s[fromIdx].tasks.filter(x => x.id !== taskId) };
     const ti = s.findIndex(x => x.id === toSprintId); if (ti < 0) return;
-    s[ti] = { ...s[ti], tasks: [...s[ti].tasks, task] };
+    // Prepend — задача появляется вверху целевого спринта
+    s[ti] = { ...s[ti], tasks: [task, ...s[ti].tasks] };
     u({ sprints: s });
   };
 
@@ -1060,12 +1266,14 @@ export default function App() {
 
   const totalArc = data.archiveEpics.length + data.archiveSprints.length + data.archiveTasks.length;
 
-  // Project CRUD
+  // Project CRUD. Prepend при создании, цвет по индексу из палитры.
   const addProject = () => {
     const name = t("projectN", data.pc);
-    u({ projects: [...data.projects, mkProject(name)], pc: data.pc + 1 });
+    const color = COLORS[data.projects.length % COLORS.length];
+    u({ projects: [mkProject(name, color), ...data.projects], pc: data.pc + 1 });
   };
   const renameProject = (id, name) => u({ projects: data.projects.map(p => p.id === id ? { ...p, name } : p) });
+  const recolorProject = (id, color) => u({ projects: data.projects.map(p => p.id === id ? { ...p, color } : p) });
   const deleteProject = (id) => u({
     projects: data.projects.filter(p => p.id !== id),
     epics: data.epics.map(e => e.projectId === id ? { ...e, projectId: null } : e),
@@ -1077,6 +1285,18 @@ export default function App() {
   });
 
   const inheritedProject = active && active !== "none" ? active : null;
+  const createSprint = (name, goal) => {
+    const ns = { ...mkSprint(name, goal) };
+    u({ sprints: [ns, ...data.sprints], sc: (data.sc || 1) + 1 });
+    setShowNewSprint(false);
+    setScrollTarget({ kind: "sprint", id: ns.id });
+  };
+  const createSprintForAll = (name, goal) => {
+    const batch = data.projects.map(p => ({ ...mkSprint(`${name} — ${p.name}`, goal) }));
+    u({ sprints: [...batch, ...data.sprints], sc: (data.sc || 1) + 1 });
+    setShowNewSprint(false);
+    setScrollTarget({ kind: "sprint", id: batch[0].id });
+  };
 
   return (
     <div style={R}>
@@ -1087,11 +1307,17 @@ export default function App() {
         const sprintOpts = currentSprintIdx != null
           ? data.sprints.filter((_, i) => i !== currentSprintIdx)
           : [];
+        // onDelete нужен только когда задача живёт в активном спринте —
+        // покрывает сценарий "+ task → cancel" без оставления пустого призрака.
+        const onDelete = currentSprintIdx != null
+          ? () => softArchiveTask(currentSprintIdx, modal.task.id)
+          : null;
         return (
           <TaskModal
             task={modal.task} allEpics={allEpics} projects={data.projects} sprints={sprintOpts}
             readOnly={readOnly} t={t} lang={lang}
             onUpdate={tk => updateTaskInPlace(tk, modal.source)}
+            onDelete={onDelete}
             onMove={currentSprintIdx != null ? (targetSprintId) => moveTask(modal.task.id, currentSprintIdx, targetSprintId) : null}
             onClose={() => setModal(null)}
           />
@@ -1101,6 +1327,7 @@ export default function App() {
         <EpicModal
           epic={modal.epic} allTasks={allTasks} projects={data.projects} readOnly={modal.readOnly} t={t}
           onUpdate={ep => u({ epics: data.epics.map(x => x.id === ep.id ? ep : x) })}
+          onDelete={modal.readOnly ? null : () => u({ epics: data.epics.filter(x => x.id !== modal.epic.id) })}
           onClose={() => setModal(null)}
           onOpenTask={tk => { const src = findTaskSource(tk); if (src) setModal({ type: "task", task: tk, source: src }); }}
         />
@@ -1114,7 +1341,8 @@ export default function App() {
       )}
       {modal?.type === "projects" && (
         <ProjectsModal
-          projects={data.projects} onAdd={addProject} onRename={renameProject} onDelete={deleteProject} t={t}
+          projects={data.projects} t={t}
+          onAdd={addProject} onRename={renameProject} onRecolor={recolorProject} onDelete={deleteProject}
           onClose={() => setModal(null)}
         />
       )}
@@ -1126,14 +1354,16 @@ export default function App() {
       {!narrow && <Wordmark />}
 
       {/* Floating utility cluster — fixed top-right.
-         Shows current state (lang code + theme glyph). Click toggles. */}
-      <UtilityCluster lang={lang} theme={theme} t={t}
-        onToggleLang={() => u({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } })}
+         Undo (влево), потом lang + theme (preferences). */}
+      <UtilityCluster lang={lang} theme={theme} t={t} canUndo={canUndo} onUndo={doUndo}
+        onToggleLang={() => uPref({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } })}
         onToggleTheme={() => {
           const eff = theme || "light";
-          u({ ui: { ...data.ui, theme: eff === "dark" ? "light" : "dark" } });
+          uPref({ ui: { ...data.ui, theme: eff === "dark" ? "light" : "dark" } });
         }}
       />
+
+      <Toast toast={toast} />
 
       {/* Filter bar (only if projects exist) */}
       {data.projects.length > 0 && (
@@ -1148,8 +1378,8 @@ export default function App() {
           <span style={H}>{t("epics")}</span>
           <button onClick={() => {
             const ne = mkEpic(inheritedProject);
-            u({ epics: [...data.epics, ne] });
-            setScrollTarget({ kind: "epic", id: ne.id });
+            u({ epics: [ne, ...data.epics] });
+            openEpic(ne);
           }} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
           {data.epics.length > 1 && <SortToggle t={t} dir={data.sort.epics} onToggle={() => u({ sort: { ...data.sort, epics: data.sort.epics === "desc" ? "asc" : "desc" } })} />}
         </div>
@@ -1157,12 +1387,14 @@ export default function App() {
           const cnt = allTasks.filter(tk => tk.epicId === e.id).length;
           const pr = data.projects.find(p => p.id === e.projectId);
           return (
-            <div key={e.id} data-epic-id={e.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
+            <div key={e.id} className="row" data-epic-id={e.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
               <span style={{ color: "var(--fg-4)" }}>–</span>
-              <div style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
-                <Inline value={e.text} onSave={txt => u({ epics: data.epics.map(x => x.id === e.id ? { ...x, text: txt } : x) })} placeholder={t("newEpic")} />
+              <div onClick={() => openEpic(e)} style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0, cursor: "pointer" }}>
+                <span style={{ color: "var(--fg)" }}>
+                  {e.text || <span style={{ color: "var(--fg-4)", fontStyle: "italic" }}>{t("newEpic")}</span>}
+                </span>
                 {cnt > 0 && <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{cnt}</span>}
-                {pr && <Pill>{pr.name}</Pill>}
+                {pr && <ProjectTag project={pr} />}
               </div>
               {narrow ? (
                 <OverflowMenu items={[
@@ -1170,10 +1402,10 @@ export default function App() {
                   { label: t("archiveAction"), onClick: () => softArchiveEpic(e.id), danger: true },
                 ]} />
               ) : (
-                <>
+                <div className="row-actions" style={{ display: "flex", alignItems: "center", gap: 2 }}>
                   <button onClick={() => openEpic(e)} title={t("open")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
                   <button onClick={() => softArchiveEpic(e.id)} title={t("archiveAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
-                </>
+                </div>
               )}
             </div>
           );
@@ -1183,11 +1415,23 @@ export default function App() {
         )}
       </div>
 
-      {/* Sprints header with sort */}
+      {/* Sprints header with + + sort */}
       <div style={HRow}>
         <span style={{ ...H, color: "var(--fg-3)" }}>{t("sprints")}</span>
+        <button onClick={() => setShowNewSprint(v => !v)} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
         {visibleSprints.length > 1 && <SortToggle t={t} dir={data.sort.sprints} onToggle={() => u({ sort: { ...data.sort, sprints: data.sort.sprints === "desc" ? "asc" : "desc" } })} />}
       </div>
+
+      {/* Inline sprint creation form */}
+      {showNewSprint && (
+        <NewSprintForm
+          projects={data.projects} t={t}
+          defaultName=""
+          onCreate={createSprint}
+          onCreateForAll={createSprintForAll}
+          onCancel={() => setShowNewSprint(false)}
+        />
+      )}
 
       {/* Sprint cards */}
       {visibleSprints.map(sp => {
@@ -1196,29 +1440,32 @@ export default function App() {
         const doneCount = tasks.filter(tk => tk.done).length;
         const total = tasks.length;
         return (
-          <div key={sp.id} data-sprint-id={sp.id} style={SPRINT_CARD}>
+          <div key={sp.id} className="row" data-sprint-id={sp.id} style={SPRINT_CARD}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
               <Inline value={sp.name} onSave={txt => { const s = [...data.sprints]; s[si] = { ...s[si], name: txt }; u({ sprints: s }); }}
                 placeholder={t("sprint")} style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }} />
-              {total > 0 && <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{doneCount}/{total}</span>}
+              <Progress done={doneCount} total={total} />
               <span style={{ flex: 1 }} />
               <button onClick={() => {
+                // Prepend + auto-open modal (P2.3 flow):
+                // создаём draft-задачу вверху спринта и сразу открываем карточку
+                // с фокусом на title — пользователь пишет имя, опц. заполняет desc/epic.
                 const nt = mkTask("", inheritedProject);
-                const s = [...data.sprints]; s[si] = { ...s[si], tasks: [...s[si].tasks, nt] };
+                const s = [...data.sprints]; s[si] = { ...s[si], tasks: [nt, ...s[si].tasks] };
                 u({ sprints: s });
-                setScrollTarget({ kind: "task", id: nt.id });
+                openTask(nt, { sprint: si });
               }}
-                title={t("addTask")} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{t("addTask")}</button>
+                title={t("addTask")} className="act-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{t("addTask")}</button>
               {narrow ? (
                 <OverflowMenu items={[
                   { label: t("settings"), onClick: () => openSprint(si) },
                   { label: t("archiveSprintAction"), onClick: () => softArchiveSprint(si), danger: true },
                 ]} />
               ) : (
-                <>
+                <div className="row-actions" style={{ display: "flex", alignItems: "center", gap: 2 }}>
                   <button onClick={() => openSprint(si)} title={t("settings")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
                   <button onClick={() => softArchiveSprint(si)} title={t("archiveSprintAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
-                </>
+                </div>
               )}
             </div>
             {sp.goal && <div style={{ fontSize: 12, color: "var(--fg-3)", marginTop: 4, fontStyle: "italic" }}>{sp.goal}</div>}
@@ -1241,15 +1488,12 @@ export default function App() {
         );
       })}
 
-      <button onClick={() => {
-        const ns = mkSprint(data.sc);
-        u({ sprints: [...data.sprints, ns], sc: (data.sc || 1) + 1 });
-        setScrollTarget({ kind: "sprint", id: ns.id });
-      }} style={{ ...ADD, marginTop: 6, marginBottom: 32 }}>{t("addSprint")}</button>
+      {/* Legacy "+ add sprint" footer link — убрано, создание через + в header'е. */}
+      <div style={{ marginBottom: 32 }} />
 
       {/* Archive */}
       <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 20 }}>
-        <button onClick={() => u({ ui: { ...data.ui, archiveOpen: !data.ui.archiveOpen } })}
+        <button onClick={() => uPref({ ui: { ...data.ui, archiveOpen: !data.ui.archiveOpen } })}
           style={{ ...B, fontWeight: 700, fontSize: 15, color: "var(--fg)" }}>
           {t("archive")} {data.ui.archiveOpen ? "▾" : "▸"}
           <span style={{ fontWeight: 400, fontSize: 12, color: "var(--fg-3)", marginLeft: 8 }}>{totalArc}</span>
@@ -1297,7 +1541,7 @@ function Wordmark() {
 /* ── Floating utility cluster (top-right, position: fixed).
    Shows CURRENT state for both lang + theme. Click toggles to the other.
    Tiny visual footprint, scroll-independent, honors safe-area-inset. */
-function UtilityCluster({ lang, theme, t, onToggleLang, onToggleTheme }) {
+function UtilityCluster({ lang, theme, t, canUndo, onUndo, onToggleLang, onToggleTheme }) {
   const eff = theme || "light";
   const langLabel = lang === "ru" ? "RU" : "EN";
   const themeGlyph = eff === "dark" ? "☾" : "☀";
@@ -1311,10 +1555,55 @@ function UtilityCluster({ lang, theme, t, onToggleLang, onToggleTheme }) {
       display: "flex", alignItems: "center", gap: 0,
       zIndex: 50,
     }}>
+      <button onClick={onUndo} disabled={!canUndo}
+        title={(lang === "ru" ? "Отменить" : "Undo") + " (⌘Z)"}
+        className="util-btn"
+        style={{
+          fontSize: 14, lineHeight: 1,
+          opacity: canUndo ? undefined : 0.2,
+          cursor: canUndo ? "pointer" : "default",
+          marginRight: 6,
+        }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H12"/>
+        </svg>
+      </button>
       <button onClick={onToggleLang} title={t("switchTo", nextLang)}
         className="util-btn" style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.4 }}>{langLabel}</button>
       <button onClick={onToggleTheme} title={t("switchTo", nextTheme)}
         className="util-btn" style={{ fontSize: 16, lineHeight: 1 }}>{themeGlyph}</button>
+    </div>
+  );
+}
+
+/* ── Toast: короткое сообщение внизу экрана, исчезает через 2с.
+   Используется для feedback'а undo и других тихих действий. */
+function Toast({ toast }) {
+  if (!toast) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: "calc(16px + env(safe-area-inset-bottom))",
+        left: "50%",
+        transform: "translateX(-50%)",
+        background: "var(--fg)",
+        color: "var(--bg)",
+        fontSize: 12,
+        fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
+        padding: "10px 18px",
+        borderRadius: 8,
+        boxShadow: "var(--modal-shadow)",
+        zIndex: 200,
+        opacity: 0.92,
+        letterSpacing: 0.2,
+        animation: "slide-up 200ms var(--ease-out-quart)",
+        pointerEvents: "none",
+      }}
+      role="status"
+      aria-live="polite"
+    >
+      {toast.text}
     </div>
   );
 }
