@@ -121,12 +121,7 @@ const mkTask = (text = "", projectId = null) => ({
 });
 const mkEpic = (projectId = null) => ({ id: uid(), text: "", projectId, createdAt: now() });
 const mkSprint = (name = "", goal = "") => ({ id: uid(), name, goal, desc: "", tasks: [], createdAt: now() });
-const mkProject = (name, color) => ({ id: uid(), name, color });
-
-// Палитра цветов для проектов. Каждый цвет используется как border/text/7%-bg
-// в pill-фильтре и tag'ах задач. Выбирается пользователем или автоматически
-// по модулю индекса (projects.length % COLORS.length).
-const COLORS = ["#6366f1", "#f59e0b", "#22c55e", "#ef4444", "#06b6d4", "#ec4899", "#8b5cf6", "#f97316"];
+const mkProject = (name) => ({ id: uid(), name });
 
 const empty = {
   epics: [],
@@ -136,7 +131,9 @@ const empty = {
   archiveSprints: [],
   archiveEpics: [],
   activeProject: null,
-  sort: { epics: "desc", sprints: "desc" },
+  // Глобальная сортировка для всех списков (эпики + спринты).
+  // "desc" = newest first (default, данные хранятся в этом порядке).
+  sort: "desc",
   ui: { archiveOpen: false, archiveSprintExp: {}, theme: "light", lang: "ru" },
   sc: 1,
   pc: 1,
@@ -189,9 +186,9 @@ const seedDemo = () => {
       ]},
     ],
     projects: [
-      { id: pWork, name: "Работа", color: COLORS[0] },
-      { id: pPersonal, name: "Личное", color: COLORS[1] },
-      { id: pStudy, name: "Учёба", color: COLORS[2] },
+      { id: pWork, name: "Работа" },
+      { id: pPersonal, name: "Личное" },
+      { id: pStudy, name: "Учёба" },
     ],
     archiveTasks: [
       { id: "ta1", text: "Хотфикс: фикс отображения статуса в админке", desc: "", epicId: null, projectId: pWork, done: true, createdAt: D(8), archivedAt: D(7) },
@@ -205,7 +202,7 @@ const seedDemo = () => {
     ],
     archiveEpics: [],
     activeProject: null,
-    sort: { epics: "desc", sprints: "desc" },
+    sort: "desc",
     ui: { archiveOpen: false, archiveSprintExp: {}, theme: "light", lang: "ru" },
     sc: 4, pc: 4,
   };
@@ -213,13 +210,16 @@ const seedDemo = () => {
 
 const migrate = (raw) => {
   if (!raw) return empty;
+  // Старый формат sort был объектом {epics, sprints} — схлопываем в одну строку.
+  // Цвет проектов больше не используется в UI (референсный дизайн),
+  // но существующее поле color в данных не трогаем (backward-compat).
+  const sortNormalized = typeof raw.sort === "string" ? raw.sort : (raw.sort?.epics || raw.sort?.sprints || empty.sort);
   return {
     ...empty,
     ...raw,
-    sort: { ...empty.sort, ...(raw.sort || {}) },
+    sort: sortNormalized,
     ui: { ...empty.ui, ...(raw.ui || {}) },
-    // Проекты без color (до v2-апдейта) получают цвет по индексу из палитры.
-    projects: (raw.projects || []).map((p, i) => ({ color: COLORS[i % COLORS.length], ...p })),
+    projects: raw.projects || [],
     epics: (raw.epics || []).map(e => ({ projectId: null, createdAt: 0, ...e })),
     sprints: (raw.sprints || []).map(s => ({ createdAt: 0, ...s, tasks: (s.tasks || []).map(t => ({ projectId: null, ...t })) })),
     archiveEpics: (raw.archiveEpics || []).map(e => ({ projectId: null, ...e })),
@@ -490,18 +490,17 @@ function NewSprintForm({ projects, defaultName, t, onCreate, onCreateForAll, onC
   );
 }
 
-/* ── ProjectTag — pill с цветом конкретного проекта.
-   Цвет текста = project.color, фон = color + 12 (7% opacity в hex),
-   без border — чистый цветной tint. */
+/* ── ProjectTag — униформ-тинт (--pill-*).
+   В v1 был per-project цвет, но референс PRD v2 требует единого визуала
+   для минимализации цветового шума. Используем brand pill-токены. */
 function ProjectTag({ project }) {
   if (!project) return null;
-  const c = project.color || "#6366f1";
   return (
     <span style={{
       display: "inline-block",
       fontSize: 10, fontFamily: "inherit",
-      color: c,
-      background: `${c}1f`,
+      color: "var(--pill-fg)",
+      background: "var(--pill-bg)",
       padding: "1px 6px",
       borderRadius: 3,
       whiteSpace: "nowrap",
@@ -759,7 +758,7 @@ function EpicModal({ epic, allTasks, projects, onUpdate, onDelete, onClose, onOp
         {linked.map(x => (
           <div key={x.id} onClick={() => onOpenTask(x)}
             style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "5px 0", cursor: "pointer", fontSize: 13, color: x.done ? "var(--fg-3)" : "var(--fg)" }}>
-            <span style={{ color: "var(--fg-4)" }}>–</span>
+
             <span style={x.done ? { textDecoration: "line-through", flex: 1 } : { flex: 1 }}>{x.text || t("untitled")}</span>
             <span style={{ fontSize: 10, color: "var(--fg-3)", fontStyle: "italic" }}>{x._loc}</span>
             {x.done && <span style={{ fontSize: 10, color: "var(--accent)" }}>{t("done")}</span>}
@@ -775,7 +774,7 @@ function EpicModal({ epic, allTasks, projects, onUpdate, onDelete, onClose, onOp
 }
 
 /* ── Projects Modal ── */
-function ProjectsModal({ projects, onAdd, onRename, onRecolor, onDelete, onClose, t }) {
+function ProjectsModal({ projects, onAdd, onRename, onDelete, onClose, t }) {
   return (
     <Sheet onClose={onClose}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16 }}>
@@ -788,28 +787,14 @@ function ProjectsModal({ projects, onAdd, onRename, onRecolor, onDelete, onClose
           </div>
         )}
         {projects.map(p => (
-          <div key={p.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--line)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-              <span style={{ width: 10, height: 10, borderRadius: "50%", background: p.color || COLORS[0], flexShrink: 0 }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <Inline value={p.name} onSave={name => onRename(p.id, name)} placeholder={t("projectName")} />
-              </div>
-              <button onClick={() => onDelete(p.id)} title="delete project" className="icon-btn" style={{ ...B, color: "var(--fg-4)", fontSize: 13 }}>×</button>
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 34 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Inline value={p.name} onSave={name => onRename(p.id, name)} placeholder={t("projectName")} />
             </div>
-            <div style={{ display: "flex", gap: 7, marginLeft: 20 }}>
-              {COLORS.map(c => (
-                <span key={c} onClick={() => onRecolor(p.id, c)} style={{
-                  width: 20, height: 20, borderRadius: "50%",
-                  background: c, cursor: "pointer",
-                  outline: (p.color || COLORS[0]) === c ? "2px solid var(--fg)" : "none",
-                  outlineOffset: 2,
-                  transition: "outline 120ms",
-                }} />
-              ))}
-            </div>
+            <button onClick={() => onDelete(p.id)} title="delete project" className="icon-btn" style={{ ...B, color: "var(--fg-4)", fontSize: 13 }}>×</button>
           </div>
         ))}
-        <button onClick={onAdd} style={{ ...ADD, marginTop: 12 }}>{t("addProject")}</button>
+        <button onClick={onAdd} style={{ ...ADD, marginTop: 10 }}>{t("addProject")}</button>
         <div style={{ fontSize: 11, color: "var(--fg-3)", marginTop: 18, lineHeight: 1.5 }}>
           {t("deleteProjectHint")}
         </div>
@@ -854,24 +839,23 @@ function ResetModal({ onConfirm, onClose, t }) {
 /* ── Project filter bar ── */
 function FilterBar({ projects, active, onSelect, onOpenProjects, t }) {
   const items = [
-    { key: null, label: t("all"), color: null },
-    ...projects.map(p => ({ key: p.id, label: p.name, color: p.color })),
-    ...(projects.length > 0 ? [{ key: "none", label: t("noProject"), color: null }] : []),
+    { key: null, label: t("all") },
+    ...projects.map(p => ({ key: p.id, label: p.name })),
+    ...(projects.length > 0 ? [{ key: "none", label: t("noProject") }] : []),
   ];
   return (
     <div className="pill-row">
       {items.map(it => {
         const on = active === it.key;
-        // Активный project-pill заливается его цветом (белый текст); All/Unassigned — нейтрально.
-        const activeBg = it.color || "var(--active-bg)";
-        const activeFg = it.color ? "#fff" : "var(--active-fg)";
+        // Нейтральная схема (без per-project цветов): active = inverted,
+        // inactive = outline. Соответствует референс-дизайну PRD v2.
         return (
           <button key={String(it.key)} onClick={() => onSelect(it.key)} style={{
             all: "unset", cursor: "pointer", fontFamily: "inherit", fontSize: 12,
             padding: "7px 13px", borderRadius: 14, whiteSpace: "nowrap",
-            border: on ? `1px solid ${activeBg}` : "1px solid var(--line)",
-            background: on ? activeBg : "var(--panel)",
-            color: on ? activeFg : "var(--fg-2)",
+            border: on ? "1px solid var(--active-bg)" : "1px solid var(--line)",
+            background: on ? "var(--active-bg)" : "var(--panel)",
+            color: on ? "var(--active-fg)" : "var(--fg-2)",
             transition: "background var(--fast) ease-out, color var(--fast) ease-out, border-color var(--fast) ease-out",
           }}>{it.label}</button>
         );
@@ -882,14 +866,8 @@ function FilterBar({ projects, active, onSelect, onOpenProjects, t }) {
   );
 }
 
-/* ── Sort toggle ── */
-function SortToggle({ dir, onToggle, t }) {
-  return (
-    <button onClick={onToggle} style={{ ...B, color: "var(--fg-3)", fontSize: 11, fontWeight: 400, marginLeft: 8 }}>
-      {dir === "desc" ? `↓ ${t("newest")}` : `↑ ${t("oldest")}`}
-    </button>
-  );
-}
+/* Sort toggle убран — теперь глобальная сортировка находится в UtilityCluster
+   (сразу за Undo). Влияет на порядок эпиков и спринтов одновременно. */
 
 /* ── Task Row ── */
 function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDone, moveTargets = [], onMove, onOpen, narrow, t, lang }) {
@@ -1017,7 +995,7 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
           {data.archiveEpics.map((e, idx) => (
             <div key={e.id} style={AR}>
               <button onClick={() => restoreEpic(idx)} title={t("restore")} className="icon-btn" style={{ ...B, color: "var(--fg-2)" }}>↩</button>
-              <span style={{ color: "var(--fg-4)" }}>–</span>
+  
               <span style={{ textDecoration: "line-through", cursor: "pointer", flex: 1, minWidth: 0, ...truncTitle }} onClick={() => openEpic(e)}>
                 {e.text || t("untitled")}
               </span>
@@ -1085,7 +1063,7 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
             return (
               <div key={tk.id} style={AR}>
                 <button onClick={() => restoreTask(idx)} title={t("restore")} className="icon-btn" style={{ ...B, color: "var(--fg-2)" }}>↩</button>
-                <span style={{ color: "var(--fg-4)" }}>–</span>
+    
                 <span style={{ textDecoration: "line-through", cursor: "pointer", flex: 1 }} onClick={() => openTask(tk, "archiveTask")}>
                   {tk.text || t("untitled")}
                 </span>
@@ -1119,11 +1097,11 @@ export default function App() {
   const allEpics = useAllEpics(data);
 
   const epicsRaw = data?.epics;
-  const epicsDir = data?.sort?.epics;
+  const sortDir = data?.sort;
   const activeP = data?.activeProject;
   const visibleEpics = useMemo(
-    () => sortArr((epicsRaw || []).filter(x => matchesProject(x, activeP)), epicsDir || "desc"),
-    [epicsRaw, activeP, epicsDir]
+    () => sortArr((epicsRaw || []).filter(x => matchesProject(x, activeP)), sortDir || "desc"),
+    [epicsRaw, activeP, sortDir]
   );
 
   const theme = data?.ui?.theme;
@@ -1184,7 +1162,7 @@ export default function App() {
   const uPref = (p) => save({ ...data, ...p }, { skipUndo: true });
   const active = data.activeProject;
 
-  const visibleSprints = sortArr(data.sprints, data.sort.sprints);
+  const visibleSprints = sortArr(data.sprints, data.sort);
 
   const updateTaskInPlace = (updated, source) => {
     if (source === "archiveTask") {
@@ -1266,14 +1244,12 @@ export default function App() {
 
   const totalArc = data.archiveEpics.length + data.archiveSprints.length + data.archiveTasks.length;
 
-  // Project CRUD. Prepend при создании, цвет по индексу из палитры.
+  // Project CRUD. Prepend при создании, цвет больше не используется (PRD v2 neutralize).
   const addProject = () => {
     const name = t("projectN", data.pc);
-    const color = COLORS[data.projects.length % COLORS.length];
-    u({ projects: [mkProject(name, color), ...data.projects], pc: data.pc + 1 });
+    u({ projects: [mkProject(name), ...data.projects], pc: data.pc + 1 });
   };
   const renameProject = (id, name) => u({ projects: data.projects.map(p => p.id === id ? { ...p, name } : p) });
-  const recolorProject = (id, color) => u({ projects: data.projects.map(p => p.id === id ? { ...p, color } : p) });
   const deleteProject = (id) => u({
     projects: data.projects.filter(p => p.id !== id),
     epics: data.epics.map(e => e.projectId === id ? { ...e, projectId: null } : e),
@@ -1342,7 +1318,7 @@ export default function App() {
       {modal?.type === "projects" && (
         <ProjectsModal
           projects={data.projects} t={t}
-          onAdd={addProject} onRename={renameProject} onRecolor={recolorProject} onDelete={deleteProject}
+          onAdd={addProject} onRename={renameProject} onDelete={deleteProject}
           onClose={() => setModal(null)}
         />
       )}
@@ -1356,6 +1332,8 @@ export default function App() {
       {/* Floating utility cluster — fixed top-right.
          Undo (влево), потом lang + theme (preferences). */}
       <UtilityCluster lang={lang} theme={theme} t={t} canUndo={canUndo} onUndo={doUndo}
+        sort={data.sort}
+        onToggleSort={() => uPref({ sort: data.sort === "desc" ? "asc" : "desc" })}
         onToggleLang={() => uPref({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } })}
         onToggleTheme={() => {
           const eff = theme || "light";
@@ -1381,14 +1359,13 @@ export default function App() {
             u({ epics: [ne, ...data.epics] });
             openEpic(ne);
           }} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
-          {data.epics.length > 1 && <SortToggle t={t} dir={data.sort.epics} onToggle={() => u({ sort: { ...data.sort, epics: data.sort.epics === "desc" ? "asc" : "desc" } })} />}
         </div>
         {visibleEpics.map(e => {
           const cnt = allTasks.filter(tk => tk.epicId === e.id).length;
           const pr = data.projects.find(p => p.id === e.projectId);
           return (
             <div key={e.id} className="row" data-epic-id={e.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
-              <span style={{ color: "var(--fg-4)" }}>–</span>
+  
               <div onClick={() => openEpic(e)} style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0, cursor: "pointer" }}>
                 <span style={{ color: "var(--fg)" }}>
                   {e.text || <span style={{ color: "var(--fg-4)", fontStyle: "italic" }}>{t("newEpic")}</span>}
@@ -1415,11 +1392,10 @@ export default function App() {
         )}
       </div>
 
-      {/* Sprints header with + + sort */}
+      {/* Sprints header: симметричен Epics (та же стилистика, глобальный sort в toolbar) */}
       <div style={HRow}>
-        <span style={{ ...H, color: "var(--fg-3)" }}>{t("sprints")}</span>
+        <span style={H}>{t("sprints")}</span>
         <button onClick={() => setShowNewSprint(v => !v)} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
-        {visibleSprints.length > 1 && <SortToggle t={t} dir={data.sort.sprints} onToggle={() => u({ sort: { ...data.sort, sprints: data.sort.sprints === "desc" ? "asc" : "desc" } })} />}
       </div>
 
       {/* Inline sprint creation form */}
@@ -1443,7 +1419,7 @@ export default function App() {
           <div key={sp.id} className="row" data-sprint-id={sp.id} style={SPRINT_CARD}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
               <Inline value={sp.name} onSave={txt => { const s = [...data.sprints]; s[si] = { ...s[si], name: txt }; u({ sprints: s }); }}
-                placeholder={t("sprint")} style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }} />
+                placeholder={t("sprint")} style={{ fontSize: 15, color: "var(--fg)" }} />
               <Progress done={doneCount} total={total} />
               <span style={{ flex: 1 }} />
               <button onClick={() => {
@@ -1541,12 +1517,13 @@ function Wordmark() {
 /* ── Floating utility cluster (top-right, position: fixed).
    Shows CURRENT state for both lang + theme. Click toggles to the other.
    Tiny visual footprint, scroll-independent, honors safe-area-inset. */
-function UtilityCluster({ lang, theme, t, canUndo, onUndo, onToggleLang, onToggleTheme }) {
+function UtilityCluster({ lang, theme, t, canUndo, onUndo, sort, onToggleSort, onToggleLang, onToggleTheme }) {
   const eff = theme || "light";
   const langLabel = lang === "ru" ? "RU" : "EN";
   const themeGlyph = eff === "dark" ? "☾" : "☀";
   const nextTheme = eff === "dark" ? t("light") : t("dark");
   const nextLang = lang === "ru" ? t("english") : t("russian");
+  const sortLabel = sort === "desc" ? `↓ ${t("newest")}` : `↑ ${t("oldest")}`;
   return (
     <div style={{
       position: "fixed",
@@ -1560,16 +1537,20 @@ function UtilityCluster({ lang, theme, t, canUndo, onUndo, onToggleLang, onToggl
         className="util-btn"
         style={{
           fontSize: 14, lineHeight: 1,
-          // Когда доступно — чуть заметнее остальных (0.7) чтобы сигнализировать
-          // "это actionable прямо сейчас". Disabled — 0.2, почти невидимо.
           opacity: canUndo ? 0.7 : 0.2,
           cursor: canUndo ? "pointer" : "default",
-          marginRight: 6,
         }}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H12"/>
         </svg>
       </button>
+      <button onClick={onToggleSort}
+        title={(lang === "ru" ? "Сортировка" : "Sort") + ": " + sortLabel}
+        className="util-btn"
+        style={{ fontSize: 11, lineHeight: 1, whiteSpace: "nowrap", padding: "6px 10px" }}>
+        {sortLabel}
+      </button>
+      <div style={{ width: 6 }} />
       <button onClick={onToggleLang} title={t("switchTo", nextLang)}
         className="util-btn" style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.4 }}>{langLabel}</button>
       <button onClick={onToggleTheme} title={t("switchTo", nextTheme)}
