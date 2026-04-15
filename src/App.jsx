@@ -458,7 +458,13 @@ function NewSprintForm({ projects, defaultName, t, onCreate, onCreateForAll, onC
   const [name, setName] = useState(defaultName || "");
   const [goal, setGoal] = useState("");
   const ref = useRef(null);
-  useEffect(() => { if (ref.current) { ref.current.focus(); ref.current.select(); } }, []);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      ref.current?.focus();
+      ref.current?.select?.();
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
   const submit = () => { if (!name.trim()) return; onCreate(name.trim(), goal.trim()); };
   const submitAll = () => { if (!name.trim()) return; onCreateForAll(name.trim(), goal.trim()); };
   const onKey = e => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); };
@@ -598,7 +604,14 @@ function Sheet({ children, onClose }) {
           <Drawer.Overlay style={{
             position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
           }} />
-          <Drawer.Content style={{
+          <Drawer.Content
+            onOpenAutoFocus={(e) => {
+              // Radix auto-focuses the first tabbable на mount, что перехватывает
+              // наши useEffect'ы (TaskModal/ResetModal фокусят title-input, чтобы
+              // юзер сразу печатал). preventDefault отдаёт focus дочерним компонентам.
+              e.preventDefault();
+            }}
+            style={{
             position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 101,
             background: "var(--panel)", color: "var(--fg)",
             borderRadius: "16px 16px 0 0",
@@ -652,7 +665,14 @@ function TaskModal({ task, allEpics, projects, sprints, onUpdate, onDelete, onCl
   // Тогда cancel удаляет task (не оставлять мусор), save с пустым — тоже удаляет.
   const wasEmpty = !task.text;
   useEffect(() => {
-    if (wasEmpty && titleRef.current) { titleRef.current.focus(); titleRef.current.select?.(); }
+    if (!wasEmpty) return;
+    // RAF отдаёт Vaul/Radix FocusScope сперва отработать mount-focus,
+    // потом мы ставим фокус на title — пользователь может сразу печатать.
+    const id = requestAnimationFrame(() => {
+      titleRef.current?.focus();
+      titleRef.current?.select?.();
+    });
+    return () => cancelAnimationFrame(id);
   }, []);
   const save = () => {
     const finalText = text.trim();
@@ -860,7 +880,10 @@ function ProjectsModal({ projects, onAdd, onRename, onDelete, onClose, t }) {
 function ResetModal({ onConfirm, onClose, t }) {
   const [val, setVal] = useState("");
   const r = useRef(null);
-  useEffect(() => { if (r.current) r.current.focus(); }, []);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => r.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, []);
   // Keyword stays English: it's a security pattern, not a translatable label.
   const KW = "reset";
   const ok = val.trim().toLowerCase() === KW;
@@ -1146,21 +1169,27 @@ export default function App() {
 
   /* History-API wrapper: открытие модалки кладёт state в history stack,
      чтобы system back button (Android) и back-swipe (iOS Safari 17+)
-     закрывали sheet вместо выхода из приложения. */
+     закрывали sheet вместо выхода из приложения.
+
+     Side effects (push/back) держим ВНЕ updater'а — React.StrictMode
+     двойной вызов updater'а выстрелил бы history.back() дважды и
+     выбросил юзера со страницы. Ref синхронно трекает prev-состояние. */
+  const modalRef = useRef(null);
   const setModal = useCallback((m) => {
-    setModalRaw(prev => {
-      if (m && !prev) {
-        try { history.pushState({ sdvgModal: true }, ""); } catch {}
-      } else if (!m && prev && history.state?.sdvgModal) {
-        // Programmatic close (X/overlay) — потребляем history entry, иначе
-        // юзер тапнет back и выйдет из приложения "неожиданно".
-        try { history.back(); } catch {}
-      }
-      return m;
-    });
+    const prev = modalRef.current;
+    modalRef.current = m;
+    if (m && !prev) {
+      try { history.pushState({ sdvgModal: true }, ""); } catch {}
+    } else if (!m && prev && history.state?.sdvgModal) {
+      try { history.back(); } catch {}
+    }
+    setModalRaw(m);
   }, []);
   useEffect(() => {
-    const onPop = () => setModalRaw(null);
+    const onPop = () => {
+      modalRef.current = null;
+      setModalRaw(null);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
