@@ -455,21 +455,23 @@ function Sheet({ children, onClose }) {
   } : O.bg;
   const box = narrow ? {
     background: "var(--panel)", color: "var(--fg)",
-    borderRadius: "14px 14px 0 0",
+    borderRadius: "16px 16px 0 0",
     padding: "var(--modal-pad)",
+    paddingTop: 8,
     paddingBottom: "calc(var(--modal-pad) + env(safe-area-inset-bottom))",
-    width: "100%", maxHeight: "88vh", overflow: "auto",
-    boxShadow: "var(--modal-shadow)",
+    width: "100%", maxHeight: "92vh", overflow: "auto",
+    // Native bottom-sheet поднимается на тёмный backdrop с явной тенью сверху
+    boxShadow: "0 -10px 32px rgba(0, 0, 0, 0.18)",
     fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
-    border: "1px solid var(--line)", borderBottom: 0,
+    borderTop: "1px solid var(--line)",
   } : O.box;
   return (
-    <div className="anim-overlay" style={bg} onClick={onClose}>
+    <div className={narrow ? "anim-sheet-overlay" : "anim-overlay"} style={bg} onClick={onClose}>
       <div className={narrow ? "anim-sheet" : "anim-box"} style={box} onClick={e => e.stopPropagation()}>
-        {/* Drag handle visual hint on mobile */}
+        {/* Drag-affordance: маленькая полоска сверху, как в iOS sheet */}
         {narrow && (
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-            <div style={{ width: 36, height: 4, borderRadius: 2, background: "var(--line-2)" }} />
+          <div style={{ display: "flex", justifyContent: "center", padding: "6px 0 14px" }}>
+            <div style={{ width: 40, height: 5, borderRadius: 3, background: "var(--line-2)" }} />
           </div>
         )}
         {children}
@@ -753,16 +755,18 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
   // Desktop: single dense row preserving the YouTrack-style rhythm.
   if (narrow) {
     const hasMeta = ep || pr;
+    // opacity ставим только на checkbox+content, НЕ на actions —
+    // иначе выпадашка OverflowMenu внутри actions наследует прозрачность.
+    const dim = task.done ? { opacity: 0.55 } : null;
     return (
       <div style={{
         display: "flex", alignItems: "flex-start", gap: 8,
         marginBottom: 4, padding: "4px 0",
-        opacity: task.done ? 0.55 : 1,
-      }}>
-        <div style={{ paddingTop: 3 }}>
+      }} data-task-id={task.id}>
+        <div style={{ paddingTop: 3, ...dim }}>
           <Checkbox checked={task.done} onChange={() => onToggleDone(task.id)} />
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, ...dim }}>
           <div style={{
             ...(task.done ? { textDecoration: "line-through", color: "var(--fg-3)" } : {}),
             overflow: "hidden", textOverflow: "ellipsis",
@@ -791,16 +795,16 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
   // Desktop: title первой строкой, pill+#epic ВСЕГДА отдельной ниже.
   // Без inline-wrap'а — это давало "скачущие" высоты строк между задачами.
   const hasMeta = ep || pr;
+  const dim = task.done ? { opacity: 0.55 } : null;
   return (
     <div style={{
       display: "flex", alignItems: "flex-start", gap: 8,
       paddingTop: 3, marginBottom: 2,
-      opacity: task.done ? 0.55 : 1,
-    }}>
-      <div style={{ paddingTop: 4, flexShrink: 0 }}>
+    }} data-task-id={task.id}>
+      <div style={{ paddingTop: 4, flexShrink: 0, ...dim }}>
         <Checkbox checked={task.done} onChange={() => onToggleDone(task.id)} />
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: 1, minWidth: 0, ...dim }}>
         <div style={task.done ? { textDecoration: "line-through", color: "var(--fg-3)" } : {}}>
           <Inline value={task.text} onSave={txt => onUpdate({ ...task, text: txt })} placeholder={t("newTask")}
             style={task.done ? { color: "var(--fg-3)" } : {}} />
@@ -957,6 +961,19 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute("lang", lang);
   }, [lang]);
+
+  // Scroll-to-new: после добавления сущности фокусируемся на ней.
+  // Ждём rAF чтобы DOM успел отрендериться, потом scrollIntoView.
+  const [scrollTarget, setScrollTarget] = useState(null);
+  useEffect(() => {
+    if (!scrollTarget) return;
+    const id = requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-${scrollTarget.kind}-id="${scrollTarget.id}"]`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setScrollTarget(null);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [scrollTarget]);
 
   if (loading) return <div style={{ padding: 40, fontFamily: "monospace", color: "var(--fg-2)" }}>...</div>;
   if (!data) return null;
@@ -1129,14 +1146,18 @@ export default function App() {
       <div style={SEC}>
         <div style={HRow}>
           <span style={H}>{t("epics")}</span>
-          <button onClick={() => u({ epics: [...data.epics, mkEpic(inheritedProject)] })} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
+          <button onClick={() => {
+            const ne = mkEpic(inheritedProject);
+            u({ epics: [...data.epics, ne] });
+            setScrollTarget({ kind: "epic", id: ne.id });
+          }} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
           {data.epics.length > 1 && <SortToggle t={t} dir={data.sort.epics} onToggle={() => u({ sort: { ...data.sort, epics: data.sort.epics === "desc" ? "asc" : "desc" } })} />}
         </div>
         {visibleEpics.map(e => {
           const cnt = allTasks.filter(tk => tk.epicId === e.id).length;
           const pr = data.projects.find(p => p.id === e.projectId);
           return (
-            <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
+            <div key={e.id} data-epic-id={e.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
               <span style={{ color: "var(--fg-4)" }}>–</span>
               <div style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
                 <Inline value={e.text} onSave={txt => u({ epics: data.epics.map(x => x.id === e.id ? { ...x, text: txt } : x) })} placeholder={t("newEpic")} />
@@ -1175,13 +1196,18 @@ export default function App() {
         const doneCount = tasks.filter(tk => tk.done).length;
         const total = tasks.length;
         return (
-          <div key={sp.id} style={SPRINT_CARD}>
+          <div key={sp.id} data-sprint-id={sp.id} style={SPRINT_CARD}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
               <Inline value={sp.name} onSave={txt => { const s = [...data.sprints]; s[si] = { ...s[si], name: txt }; u({ sprints: s }); }}
                 placeholder={t("sprint")} style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }} />
               {total > 0 && <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{doneCount}/{total}</span>}
               <span style={{ flex: 1 }} />
-              <button onClick={() => { const s = [...data.sprints]; s[si] = { ...s[si], tasks: [...s[si].tasks, mkTask("", inheritedProject)] }; u({ sprints: s }); }}
+              <button onClick={() => {
+                const nt = mkTask("", inheritedProject);
+                const s = [...data.sprints]; s[si] = { ...s[si], tasks: [...s[si].tasks, nt] };
+                u({ sprints: s });
+                setScrollTarget({ kind: "task", id: nt.id });
+              }}
                 title={t("addTask")} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{t("addTask")}</button>
               {narrow ? (
                 <OverflowMenu items={[
@@ -1215,8 +1241,11 @@ export default function App() {
         );
       })}
 
-      <button onClick={() => u({ sprints: [...data.sprints, mkSprint(data.sc)], sc: (data.sc || 1) + 1 })}
-        style={{ ...ADD, marginTop: 6, marginBottom: 32 }}>{t("addSprint")}</button>
+      <button onClick={() => {
+        const ns = mkSprint(data.sc);
+        u({ sprints: [...data.sprints, ns], sc: (data.sc || 1) + 1 });
+        setScrollTarget({ kind: "sprint", id: ns.id });
+      }} style={{ ...ADD, marginTop: 6, marginBottom: 32 }}>{t("addSprint")}</button>
 
       {/* Archive */}
       <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 20 }}>
@@ -1274,32 +1303,18 @@ function UtilityCluster({ lang, theme, t, onToggleLang, onToggleTheme }) {
   const themeGlyph = eff === "dark" ? "☾" : "☀";
   const nextTheme = eff === "dark" ? t("light") : t("dark");
   const nextLang = lang === "ru" ? t("english") : t("russian");
-  const wrap = {
-    position: "fixed",
-    top: "calc(8px + env(safe-area-inset-top))",
-    right: "calc(8px + env(safe-area-inset-right))",
-    display: "flex", alignItems: "center", gap: 0,
-    zIndex: 50,
-  };
-  const btn = {
-    all: "unset", cursor: "pointer",
-    fontFamily: "inherit", fontSize: 11,
-    color: "var(--fg-3)", opacity: 0.5,
-    padding: "6px 8px", minWidth: 32, minHeight: 32,
-    borderRadius: 5,
-    display: "inline-flex", alignItems: "center", justifyContent: "center",
-    transition: "opacity var(--fast) var(--ease-out-quart), background var(--fast) var(--ease-out-quart)",
-  };
-  const onEnter = e => { e.currentTarget.style.opacity = 1; e.currentTarget.style.background = "var(--surface)"; };
-  const onLeave = e => { e.currentTarget.style.opacity = 0.5; e.currentTarget.style.background = "transparent"; };
   return (
-    <div style={wrap}>
+    <div style={{
+      position: "fixed",
+      top: "calc(8px + env(safe-area-inset-top))",
+      right: "calc(8px + env(safe-area-inset-right))",
+      display: "flex", alignItems: "center", gap: 0,
+      zIndex: 50,
+    }}>
       <button onClick={onToggleLang} title={t("switchTo", nextLang)}
-        onMouseEnter={onEnter} onMouseLeave={onLeave}
-        style={{ ...btn, fontWeight: 600, letterSpacing: 0.4 }}>{langLabel}</button>
+        className="util-btn" style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.4 }}>{langLabel}</button>
       <button onClick={onToggleTheme} title={t("switchTo", nextTheme)}
-        onMouseEnter={onEnter} onMouseLeave={onLeave}
-        style={{ ...btn, fontSize: 16, lineHeight: 1 }}>{themeGlyph}</button>
+        className="util-btn" style={{ fontSize: 16, lineHeight: 1 }}>{themeGlyph}</button>
     </div>
   );
 }

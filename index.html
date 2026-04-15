@@ -200,6 +200,27 @@
         }
       }
 
+      /* Utility cluster (RU/EN, тема) — CSS-only hover чтобы не было sticky-эффекта на тач:
+         JS onMouseEnter/Leave фейерится и при tap'е на мобиле, оставляя hover-стили. */
+      .util-btn {
+        all: unset;
+        cursor: pointer;
+        font-family: inherit;
+        color: var(--fg-3);
+        opacity: 0.5;
+        padding: 6px 8px;
+        min-width: 32px; min-height: 32px;
+        border-radius: 5px;
+        display: inline-flex;
+        align-items: center; justify-content: center;
+        transition: opacity var(--fast) var(--ease-out-quart),
+                    background var(--fast) var(--ease-out-quart);
+      }
+      @media (hover: hover) {
+        .util-btn:hover { opacity: 1; background: var(--surface); }
+      }
+      .util-btn:focus-visible { opacity: 1; }
+
       .pill-row {
         display: flex;
         gap: 6px;
@@ -238,12 +259,20 @@
         100% { transform: scale(1); }
       }
       @keyframes sheet-up {
-        from { opacity: 0; transform: translateY(100%); }
-        to   { opacity: 1; transform: translateY(0); }
+        from { transform: translateY(100%); }
+        to   { transform: translateY(0); }
+      }
+      @keyframes sheet-overlay {
+        from { opacity: 0; }
+        to   { opacity: 1; }
       }
       .anim-sheet {
-        animation: sheet-up 320ms var(--ease-out-quint);
-        will-change: transform, opacity;
+        /* iOS-style: short, confident expo-out — без bounce, без opacity-фейда (только translate). */
+        animation: sheet-up 260ms var(--ease-out-expo);
+        will-change: transform;
+      }
+      .anim-sheet-overlay {
+        animation: sheet-overlay 220ms var(--ease-out-quart);
       }
 
       .anim-overlay { animation: fade-in var(--med) var(--ease-out-quart); }
