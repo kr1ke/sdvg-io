@@ -354,7 +354,8 @@ function Select({ value, onChange, options, placeholder = "—", disabled = fals
         onClick={() => !disabled && setOpen(o => !o)}
         disabled={disabled}
         style={{
-          all: "unset", display: "block", width: "100%", boxSizing: "border-box",
+          all: "unset", display: "flex", alignItems: "center", gap: 8,
+          width: "100%", boxSizing: "border-box",
           padding: "8px 10px", fontSize: 13, color: "var(--fg)", cursor: disabled ? "default" : "pointer",
           background: disabled ? "var(--surface)" : "var(--panel)",
           border: "1px solid var(--line)", borderRadius: 4, fontFamily: "inherit",
@@ -362,8 +363,13 @@ function Select({ value, onChange, options, placeholder = "—", disabled = fals
           transition: "border-color var(--fast) ease-out, background var(--fast) ease-out",
         }}
       >
-        <span>{current ? current.label : <span style={{ color: "var(--fg-3)" }}>{placeholder}</span>}</span>
-        <span style={{ float: "right", color: "var(--fg-3)", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
+        {/* Flex + min-width:0 + trunc — старый float:right arrow давал overflow
+            при длинных label'ах (в узком модалке на мобиле 1fr-колонки ≈ 168px,
+            а "Designing Data-Intensive Applications" рендерится ~280px). */}
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {current ? current.label : <span style={{ color: "var(--fg-3)" }}>{placeholder}</span>}
+        </span>
+        <span style={{ color: "var(--fg-3)", fontSize: 11, flexShrink: 0 }}>{open ? "▾" : "▸"}</span>
       </button>
       {open && (
         <div className="anim-menu" style={{
@@ -520,7 +526,7 @@ function NewSprintForm({ projects, defaultName, t, onCreate, onCreateForAll, onC
 /* ── ProjectTag — униформ-тинт (--pill-*).
    В v1 был per-project цвет, но референс PRD v2 требует единого визуала
    для минимализации цветового шума. Используем brand pill-токены. */
-function ProjectTag({ project }) {
+function ProjectTag({ project, maxWidth }) {
   if (!project) return null;
   return (
     <span style={{
@@ -533,6 +539,12 @@ function ProjectTag({ project }) {
       whiteSpace: "nowrap",
       lineHeight: 1.4,
       fontWeight: 500,
+      /* Flex-child guard: без flexShrink:0 в узком контейнере nowrap-текст
+         выпадает за пределы tag'а и ломает meta-row (длинное имя проекта
+         толкает дату за край экрана). Опциональный maxWidth + ellipsis —
+         для случаев, когда project name реально слишком длинный. */
+      flexShrink: 0,
+      ...(maxWidth ? { maxWidth, overflow: "hidden", textOverflow: "ellipsis" } : null),
     }}>{project.name}</span>
   );
 }
@@ -1012,11 +1024,14 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
             {task.text || <span style={{ color: "var(--fg-4)", fontStyle: "italic" }}>{t("newTask")}</span>}
           </div>
           {hasMeta && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 11, color: "var(--fg-3)" }}>
-              {pr && <ProjectTag project={pr} />}
-              {ep && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>#{ep.text}</span>}
-              <span style={{ flex: 1 }} />
-              <span style={{ fontStyle: "italic", color: "var(--fg-4)" }}>{rel(task.createdAt, lang)}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 11, color: "var(--fg-3)", minWidth: 0 }}>
+              {pr && <ProjectTag project={pr} maxWidth={110} />}
+              {/* Epic берёт всё оставшееся пространство между pill'ом и датой,
+                  усечение по ellipsis. Старый maxWidth:60% ломался при длинном
+                  project name — flex-распределение корректнее. */}
+              {ep && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>#{ep.text}</span>}
+              {!ep && <span style={{ flex: 1 }} />}
+              <span style={{ fontStyle: "italic", color: "var(--fg-4)", flexShrink: 0 }}>{rel(task.createdAt, lang)}</span>
             </div>
           )}
           {!hasMeta && (
@@ -1128,11 +1143,11 @@ function ArchiveView({ data, u, allEpics, projects, openTask, openEpic, restoreT
                   <div style={{ flex: 1, minWidth: 0, paddingTop: 4 }}>
                     <div style={{ textDecoration: "line-through", color: "var(--fg-3)", fontSize: 13, ...truncTitle, cursor: "pointer" }}
                          onClick={() => openTask(tk, "archiveTask")}>{tk.text || t("untitled")}</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, fontSize: 10, color: "var(--fg-4)" }}>
-                      {pr && <ProjectTag project={pr} />}
-                      {ep && <span style={{ ...truncTitle, maxWidth: "40%" }}>#{ep.text}</span>}
-                      <span style={{ flex: 1 }} />
-                      <span style={{ fontStyle: "italic" }}>{fmt(tk.archivedAt, lang)}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, fontSize: 10, color: "var(--fg-4)", minWidth: 0 }}>
+                      {pr && <ProjectTag project={pr} maxWidth={90} />}
+                      {ep && <span style={{ ...truncTitle, flex: 1, minWidth: 0 }}>#{ep.text}</span>}
+                      {!ep && <span style={{ flex: 1 }} />}
+                      <span style={{ fontStyle: "italic", flexShrink: 0 }}>{fmt(tk.archivedAt, lang)}</span>
                     </div>
                   </div>
                 </div>
@@ -1530,32 +1545,41 @@ export default function App() {
         const total = tasks.length;
         return (
           <div key={sp.id} className="row" data-sprint-id={sp.id} style={SPRINT_CARD}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-              <Inline value={sp.name} onSave={txt => { const s = [...data.sprints]; s[si] = { ...s[si], name: txt }; u({ sprints: s }); }}
-                placeholder={t("sprint")} style={{ fontSize: 15, color: "var(--fg)" }} />
-              <Progress done={doneCount} total={total} />
-              <span style={{ flex: 1 }} />
-              <button onClick={() => {
-                // Prepend + auto-open modal (P2.3 flow):
-                // создаём draft-задачу вверху спринта и сразу открываем карточку
-                // с фокусом на title — пользователь пишет имя, опц. заполняет desc/epic.
-                const nt = mkTask("", inheritedProject);
-                const s = [...data.sprints]; s[si] = { ...s[si], tasks: [nt, ...s[si].tasks] };
-                u({ sprints: s });
-                openTask(nt, { sprint: si });
-              }}
-                title={t("addTask")} className="act-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{t("addTask")}</button>
-              {narrow ? (
-                <OverflowMenu items={[
-                  { label: t("settings"), onClick: () => openSprint(si) },
-                  { label: t("archiveSprintAction"), onClick: () => softArchiveSprint(si), danger: true },
-                ]} />
-              ) : (
-                <div className="row-actions" style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                  <button onClick={() => openSprint(si)} title={t("settings")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
-                  <button onClick={() => softArchiveSprint(si)} title={t("archiveSprintAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
-                </div>
-              )}
+            {/* Header: name truncates при необходимости, progress + actions всегда
+                на одной строке справа. Раньше flexWrap:wrap вёл к тому, что
+                длинное имя ("Следующая неделя") съедало место, OverflowMenu
+                перепрыгивал на line 2 — header становился 84px вместо 40.
+                Решение: имя берёт flex:1 min-width:0 с overflow:hidden ellipsis.
+                На узком экране длинное имя усекается, а не двигает buttons. */}
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "baseline", gap: 8, overflow: "hidden" }}>
+                <Inline value={sp.name} onSave={txt => { const s = [...data.sprints]; s[si] = { ...s[si], name: txt }; u({ sprints: s }); }}
+                  placeholder={t("sprint")} style={{ fontSize: 15, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: "0 1 auto" }} />
+                <Progress done={doneCount} total={total} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: narrow ? 4 : 2, flexShrink: 0 }}>
+                <button onClick={() => {
+                  // Prepend + auto-open modal (P2.3 flow):
+                  // создаём draft-задачу вверху спринта и сразу открываем карточку
+                  // с фокусом на title — пользователь пишет имя, опц. заполняет desc/epic.
+                  const nt = mkTask("", inheritedProject);
+                  const s = [...data.sprints]; s[si] = { ...s[si], tasks: [nt, ...s[si].tasks] };
+                  u({ sprints: s });
+                  openTask(nt, { sprint: si });
+                }}
+                  title={t("addTask")} className="act-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{t("addTask")}</button>
+                {narrow ? (
+                  <OverflowMenu items={[
+                    { label: t("settings"), onClick: () => openSprint(si) },
+                    { label: t("archiveSprintAction"), onClick: () => softArchiveSprint(si), danger: true },
+                  ]} />
+                ) : (
+                  <div className="row-actions" style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                    <button onClick={() => openSprint(si)} title={t("settings")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
+                    <button onClick={() => softArchiveSprint(si)} title={t("archiveSprintAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
+                  </div>
+                )}
+              </div>
             </div>
             {sp.goal && <div style={{ fontSize: 12, color: "var(--fg-3)", marginTop: 4, fontStyle: "italic" }}>{sp.goal}</div>}
             <div style={{ marginTop: 8 }}>

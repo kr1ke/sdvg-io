@@ -131,6 +131,13 @@
         padding: 0;
         background: var(--bg);
         color: var(--fg);
+        /* Prevent случайный horizontal scroll. Негативные margin'ы у icon-btn,
+           pill-row и act-btn на узком viewport'е могут выходить за правую
+           границу body на 2-4px. overflow-x:clip скрывает это без создания
+           scroll-контейнера (в отличие от overflow-x:hidden который ломает
+           position:sticky). Fallback на hidden для старых браузеров. */
+        overflow-x: hidden;
+        overflow-x: clip;
       }
 
       body {
@@ -141,6 +148,10 @@
         text-rendering: optimizeLegibility;
         padding-left: env(safe-area-inset-left);
         padding-right: env(safe-area-inset-right);
+        /* iOS Safari default — яркая синяя подсветка на тапе. Убираем,
+           чтобы приложение выглядело нативно. Визуальный feedback
+           обеспечивается button:active scale + анимациями открытия. */
+        -webkit-tap-highlight-color: transparent;
         transition: background var(--med) var(--ease-out-quart),
                     color var(--med) var(--ease-out-quart);
       }
@@ -283,6 +294,19 @@
       }
       @media (hover: none) {
         .row-actions, .act-btn { opacity: 1; }
+      }
+
+      /* Mobile tap target: '+task' в sprint card по умолчанию ~50x18px —
+         меньше WCAG minimum 24x24. Добавляем вертикальный паддинг чтобы
+         палец попадал. Negative-margin компенсирует — не раздувает ряд. */
+      @media (pointer: coarse) {
+        .act-btn {
+          padding: 8px 6px !important;
+          margin: -8px -2px !important;
+          min-height: 36px !important;
+          display: inline-flex !important;
+          align-items: center !important;
+        }
       }
 
       .pill-row {
