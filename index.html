@@ -361,6 +361,18 @@
         }
       }
 
+      /* Sheet action buttons (cancel/save/done в модалках): на мобиле делаем
+         tap target побольше. padding снаружи + min-height 40 — комфортно
+         для пальца, но не доминирует визуально. */
+      @media (pointer: coarse) {
+        .sheet-action {
+          padding: 10px 14px !important;
+          min-height: 40px !important;
+          display: inline-flex !important;
+          align-items: center !important;
+        }
+      }
+
       .pill-row {
         display: flex;
         gap: 6px;
@@ -418,17 +430,26 @@
         animation: sheet-overlay 220ms var(--ease-out-quart);
       }
 
-      /* Vaul drawer: нужен CSS для анимации enter/exit, Vaul управляет
-         через data-state. Drag inline-стили Vaul перекрывают этот transform,
-         поэтому во время жеста наш transition не мешает.
-         --ease-spring-soft — iOS-like smooth settle без bounce. */
+      /* Vaul drawer: используем CSS @keyframes для enter/exit — CSS transition
+         не срабатывает потому что Vaul использует animation-name (не transform property
+         change) для open-state, и переход с animation-name на none не триггерит transition.
+         Keyframes на enter и exit гарантируют обе фазы анимации. */
+      @keyframes drawer-slide-in {
+        from { transform: translate3d(0, 100%, 0); }
+        to   { transform: translate3d(0, 0, 0); }
+      }
+      @keyframes drawer-slide-out {
+        from { transform: translate3d(0, 0, 0); }
+        to   { transform: translate3d(0, 100%, 0); }
+      }
       [data-vaul-drawer-direction="bottom"] {
-        transform: translate3d(0, 100%, 0);
-        transition: transform 380ms var(--ease-spring-soft);
         will-change: transform;
       }
       [data-vaul-drawer-direction="bottom"][data-state="open"] {
-        transform: translate3d(0, 0, 0);
+        animation: drawer-slide-in 340ms var(--ease-spring-soft) forwards !important;
+      }
+      [data-vaul-drawer-direction="bottom"][data-state="closed"] {
+        animation: drawer-slide-out 320ms var(--ease-spring-soft) forwards !important;
       }
       [data-vaul-overlay] {
         animation: sheet-overlay 220ms var(--ease-out-quart);

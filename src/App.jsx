@@ -1,5 +1,12 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
 import { Drawer } from "vaul";
+
+/* Context для передачи "открытости" модалки из App в Sheet (мимо промежуточных
+   модалок TaskModal/EpicModal/...). App выставляет open=false за 320ms до
+   unmount'а, Sheet передаёт это в Drawer.Root → Vaul успевает проиграть
+   close-анимацию (380ms transform к translateY 100%) до момента когда React
+   unmount'ит дерево. */
+const ModalOpenContext = createContext(true);
 
 const KEY = "tracker-v6";
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -660,11 +667,14 @@ function Sheet({ children, onClose }) {
   // shrinks. Добавляем inset к paddingBottom drawer'а и к bottom Toast'а
   // чтобы action-кнопки / toast не улетали под клавиатуру.
   const kbInset = useKeyboardInset();
+  // App выставляет open=false за 320ms до unmount'а → Vaul успевает проиграть
+  // close-анимацию. Default true для legacy-путей без Provider (fallback).
+  const open = useContext(ModalOpenContext);
   // Haptic pulse при открытии drawer'а — лёгкий acknowledgement как в iOS.
   useEffect(() => { haptic(5); }, []);
   if (narrow) {
     return (
-      <Drawer.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <Drawer.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
         <Drawer.Portal>
           <Drawer.Overlay style={{
             position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
@@ -692,8 +702,9 @@ function Sheet({ children, onClose }) {
             borderTop: "1px solid var(--line)",
             outline: "none",
             display: "flex", flexDirection: "column",
-            /* Smooth height transition когда keyboard появляется/исчезает —
-               spring-soft chosen так чтобы drawer не "прыгал" резко. */
+            /* padding-bottom — smooth height transition когда keyboard toggle
+               (iOS soft-keyboard appear/dismiss). Transform anim живёт в index.html
+               через @keyframes drawer-slide-in/out + animation-name по data-state. */
             transition: "padding-bottom 200ms var(--ease-spring-soft)",
           }}>
             {/* A11y: Vaul требует Title+Description, прячем через sr-only —
@@ -707,7 +718,10 @@ function Sheet({ children, onClose }) {
               flexShrink: 0,
               cursor: "grab",
             }} />
-            <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+            {/* overflowX:hidden спасает от случайных горизонтальных вылазок
+                (длинная Select option, word без whitespace, wide textarea);
+                horizontal scrollbar в drawer'е выглядит сломанно. */}
+            <div style={{ overflowY: "auto", overflowX: "hidden", flex: 1, minHeight: 0, minWidth: 0 }}>
               {children}
             </div>
           </Drawer.Content>
@@ -715,7 +729,8 @@ function Sheet({ children, onClose }) {
       </Drawer.Root>
     );
   }
-  // Desktop: centered modal — unchanged behaviour.
+  // Desktop: centered modal. Если open=false — не рендерим (cleanup).
+  if (!open) return null;
   return (
     <div className="anim-overlay" style={O.bg} onClick={onClose}>
       <div className="anim-box" style={O.box} onClick={e => e.stopPropagation()}>
@@ -787,11 +802,11 @@ function TaskModal({ task, allEpics, projects, sprints, onUpdate, onDelete, onCl
           </div>
           <button onClick={cancel} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18, flexShrink: 0 }}>×</button>
         </div>
-        <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 20, marginTop: 8, fontStyle: "italic" }}>
+        <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 20, marginTop: 8, fontStyle: "italic", wordBreak: "break-word" }}>
           {t("created")} {fmt(task.createdAt, lang)} · {rel(task.createdAt, lang)} {t("ago")}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 10, marginBottom: 14 }}>
           <div>
             <label style={O.label}>{t("epic")}</label>
             <Select value={epicId} onChange={setEpicId} options={epicOpts} disabled={readOnly} />
@@ -816,8 +831,8 @@ function TaskModal({ task, allEpics, projects, sprints, onUpdate, onDelete, onCl
           style={O.textarea} />
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
-          <button onClick={cancel} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
-          {!readOnly && <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
+          <button onClick={cancel} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          {!readOnly && <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
         </div>
     </Sheet>
   );
@@ -848,8 +863,8 @@ function SprintModal({ sprint, onUpdate, onClose, t }) {
           autoComplete="off" autoCapitalize="sentences" spellCheck
           style={O.textarea} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
-          <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
-          <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>
+          <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>
         </div>
     </Sheet>
   );
@@ -908,8 +923,8 @@ function EpicModal({ epic, allTasks, projects, onUpdate, onDelete, onClose, onOp
         ))}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 22 }}>
-          <button onClick={cancel} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
-          {!readOnly && <button onClick={save} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
+          <button onClick={cancel} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          {!readOnly && <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
         </div>
     </Sheet>
   );
@@ -941,7 +956,7 @@ function ProjectsModal({ projects, onAdd, onRename, onDelete, onClose, t }) {
           {t("deleteProjectHint")}
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 14 }}>
-          <button onClick={onClose} style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("doneFooter")}</button>
+          <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("doneFooter")}</button>
         </div>
     </Sheet>
   );
@@ -972,8 +987,8 @@ function ResetModal({ onConfirm, onClose, t }) {
           autoComplete="off" autoCapitalize="off" autoCorrect="off" enterKeyHint="send" spellCheck={false}
           style={{ all: "unset", font: "inherit", fontSize: 14, width: "100%", padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 4, boxSizing: "border-box", color: "var(--fg)", background: "var(--bg)" }} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
-          <button onClick={onClose} style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
-          <button onClick={ok ? onConfirm : undefined} disabled={!ok}
+          <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+          <button onClick={ok ? onConfirm : undefined} disabled={!ok} className="sheet-action"
             style={{ ...B, color: ok ? "var(--danger)" : "var(--fg-4)", fontSize: 13, fontWeight: 700, cursor: ok ? "pointer" : "default", padding: "8px 4px" }}>
             {KW}
           </button>
@@ -1382,22 +1397,57 @@ export default function App() {
 
      Side effects (push/back) держим ВНЕ updater'а — React.StrictMode
      двойной вызов updater'а выстрелил бы history.back() дважды и
-     выбросил юзера со страницы. Ref синхронно трекает prev-состояние. */
+     выбросил юзера со страницы. Ref синхронно трекает prev-состояние.
+
+     Close flow: m=null вместо immediate unmount сначала выставляем isClosing=true
+     → ModalOpenContext.Provider передаёт open=false в Sheet → Drawer.Root
+     видит false и начинает exit-анимацию. Через 320ms unmount'им дерево —
+     к этому моменту transform уже вернулся к translateY(100%). */
+  const [isClosing, setIsClosing] = useState(false);
   const modalRef = useRef(null);
+  const closeTimerRef = useRef(null);
+  const CLOSE_ANIM_MS = 320;
+
   const setModal = useCallback((m) => {
     const prev = modalRef.current;
-    modalRef.current = m;
     if (m && !prev) {
+      // Opening
+      if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
+      setIsClosing(false);
+      modalRef.current = m;
       try { history.pushState({ sdvgModal: true }, ""); } catch {}
-    } else if (!m && prev && history.state?.sdvgModal) {
-      try { history.back(); } catch {}
+      setModalRaw(m);
+    } else if (!m && prev) {
+      // Closing — animate then unmount
+      if (history.state?.sdvgModal) {
+        try { history.back(); } catch {}
+      }
+      setIsClosing(true);
+      closeTimerRef.current = setTimeout(() => {
+        modalRef.current = null;
+        setModalRaw(null);
+        setIsClosing(false);
+        closeTimerRef.current = null;
+      }, CLOSE_ANIM_MS);
+    } else {
+      // Switching between modals — instant
+      modalRef.current = m;
+      setModalRaw(m);
     }
-    setModalRaw(m);
   }, []);
+
   useEffect(() => {
     const onPop = () => {
-      modalRef.current = null;
-      setModalRaw(null);
+      // Back button / swipe: animate close too
+      if (!modalRef.current) return;
+      setIsClosing(true);
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = setTimeout(() => {
+        modalRef.current = null;
+        setModalRaw(null);
+        setIsClosing(false);
+        closeTimerRef.current = null;
+      }, CLOSE_ANIM_MS);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -1656,7 +1706,9 @@ export default function App() {
 
   return (
     <div style={R}>
-      {/* Modals */}
+      {/* Modals wrapped in ModalOpenContext.Provider — open=false на closing-фазе,
+          Sheet видит это и даёт Vaul проиграть exit-анимацию до unmount'а. */}
+      <ModalOpenContext.Provider value={!isClosing}>
       {modal?.type === "task" && (() => {
         const readOnly = modal.source === "archiveTask" || typeof modal.source?.arcSprint === "number";
         const currentSprintIdx = typeof modal.source?.sprint === "number" ? modal.source.sprint : null;
@@ -1705,6 +1757,7 @@ export default function App() {
       {modal?.type === "reset" && (
         <ResetModal t={t} onConfirm={() => { save({ ...empty, wasReset: true }); setModal(null); }} onClose={() => setModal(null)} />
       )}
+      </ModalOpenContext.Provider>
 
       {/* Wordmark "sdvg.io" — eyebrow в дальнем верхнем-левом, только desktop. */}
       {!narrow && <Wordmark />}
@@ -2016,8 +2069,11 @@ const AH = { fontSize: 13, fontWeight: 600, color: "var(--fg-2)", marginBottom: 
 const AHCount = { fontSize: 11, color: "var(--fg-4)", fontWeight: 400 };
 const O = {
   bg: { position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 10 },
-  box: { background: "var(--panel)", color: "var(--fg)", borderRadius: 8, padding: "var(--modal-pad)", width: "var(--modal-w)", maxWidth: 480, maxHeight: "90vh", overflow: "auto", boxShadow: "var(--modal-shadow)", fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace", border: "1px solid var(--line)" },
-  dd: { position: "absolute", right: 0, top: "calc(100% + 4px)", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, padding: 3, zIndex: 30, minWidth: 140, boxShadow: "var(--menu-shadow)" },
+  box: { background: "var(--panel)", color: "var(--fg)", borderRadius: 8, padding: "var(--modal-pad)", width: "var(--modal-w)", maxWidth: 480, maxHeight: "90dvh", overflow: "auto", boxShadow: "var(--modal-shadow)", fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace", border: "1px solid var(--line)" },
+  /* z-index 60: выше sticky section-header (40) и util-cluster (50).
+     Раньше zIndex: 30 давал конфликт — dropdown эпика/задачи попадал
+     под sticky header'ом sprint'ов при скролле. */
+  dd: { position: "absolute", right: 0, top: "calc(100% + 4px)", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, padding: 3, zIndex: 60, minWidth: 140, boxShadow: "var(--menu-shadow)" },
   label: { display: "block", fontSize: 11, color: "var(--fg-2)", marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.4 },
-  textarea: { all: "unset", display: "block", width: "100%", font: "inherit", fontSize: 13, color: "var(--fg)", border: "1px solid var(--line)", borderRadius: 4, padding: 10, whiteSpace: "pre-wrap", minHeight: 100, lineHeight: 1.55, boxSizing: "border-box", background: "var(--bg)" },
+  textarea: { all: "unset", display: "block", width: "100%", font: "inherit", fontSize: 13, color: "var(--fg)", border: "1px solid var(--line)", borderRadius: 4, padding: 10, whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere", minHeight: 100, lineHeight: 1.55, boxSizing: "border-box", background: "var(--bg)" },
 };
