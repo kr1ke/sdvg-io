@@ -311,6 +311,50 @@ function useNarrow(threshold = 600) {
   return narrow;
 }
 
+/* ── Virtual-keyboard inset via Visual Viewport API.
+   Когда on-screen keyboard открывается, visualViewport.height < innerHeight.
+   Разница (+ offsetTop на iOS где scroll вместо resize) = высота keyboard'а.
+   Используем в Drawer/Toast чтобы action-кнопки не улетали под клавиатуру.
+   Safari 13+, Chrome 61+. Fallback 0 (ни одна кнопка не уедет, просто менее precise). */
+function useKeyboardInset() {
+  const [inset, setInset] = useState(0);
+  useEffect(() => {
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    if (!vv) return;
+    const update = () => {
+      const kb = window.innerHeight - vv.height - vv.offsetTop;
+      setInset(Math.max(0, Math.round(kb)));
+    };
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    update();
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
+  return inset;
+}
+
+/* ── Online/offline detection. navigator.onLine ненадёжен при старте,
+   но 'online'/'offline' events срабатывают реально при смене сети.
+   Используем для user feedback: приложение работает оффлайн (localStorage),
+   но пользователь должен видеть это состояние явно. */
+function useOnline() {
+  const [online, setOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+  return online;
+}
+
 /* ── Inline editable text ── */
 function Inline({ value, onSave, placeholder, style: s = {} }) {
   const [ed, setEd] = useState(false);
@@ -561,7 +605,10 @@ function OverflowMenu({ items }) {
   }, [open]);
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <button onClick={() => setOpen(o => !o)} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 16, lineHeight: 1 }}>…</button>
+      {/* data-overflow-trigger используется long-press handler'ом в TaskRow —
+          на контексте row'а находим этот button и триггерим click. Переиспользуем
+          существующую open/close логику вместо дублирования menu state. */}
+      <button data-overflow-trigger="" onClick={() => setOpen(o => !o)} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 16, lineHeight: 1 }}>…</button>
       {open && (
         <div className="anim-menu" style={O.dd}>
           {items.map((it, i) => (
@@ -609,6 +656,12 @@ const SR_ONLY = {
 };
 function Sheet({ children, onClose }) {
   const narrow = useNarrow();
+  // Keyboard inset: когда user фокусит input внутри drawer'а, visualViewport
+  // shrinks. Добавляем inset к paddingBottom drawer'а и к bottom Toast'а
+  // чтобы action-кнопки / toast не улетали под клавиатуру.
+  const kbInset = useKeyboardInset();
+  // Haptic pulse при открытии drawer'а — лёгкий acknowledgement как в iOS.
+  useEffect(() => { haptic(5); }, []);
   if (narrow) {
     return (
       <Drawer.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -629,16 +682,19 @@ function Sheet({ children, onClose }) {
             borderRadius: "16px 16px 0 0",
             padding: "var(--modal-pad)",
             paddingTop: 8,
-            /* Bottom padding: 28px breathing room + home-indicator inset.
-               var(--modal-pad) был shorthand (18px 14px), calc'ить с shorthand
-               нельзя — silent fallback оставлял кнопки вплотную к краю экрана. */
-            paddingBottom: "calc(28px + env(safe-area-inset-bottom))",
-            maxHeight: "92vh",
+            /* Bottom padding: 28px breathing room + home-indicator inset + keyboard inset.
+               kbInset добавляется когда открыта soft keyboard (Visual Viewport API) —
+               кнопки save/cancel остаются видимыми над клавиатурой. */
+            paddingBottom: `calc(28px + env(safe-area-inset-bottom) + ${kbInset}px)`,
+            maxHeight: "92dvh",
             boxShadow: "0 -10px 32px rgba(0, 0, 0, 0.18)",
             fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
             borderTop: "1px solid var(--line)",
             outline: "none",
             display: "flex", flexDirection: "column",
+            /* Smooth height transition когда keyboard появляется/исчезает —
+               spring-soft chosen так чтобы drawer не "прыгал" резко. */
+            transition: "padding-bottom 200ms var(--ease-spring-soft)",
           }}>
             {/* A11y: Vaul требует Title+Description, прячем через sr-only —
                 визуально повторять "Sheet" бессмысленно, смысл даёт контент. */}
@@ -959,6 +1015,124 @@ function FilterBar({ projects, active, onSelect, onOpenProjects, t }) {
 /* Sort toggle убран — теперь глобальная сортировка находится в UtilityCluster
    (сразу за Undo). Влияет на порядок эпиков и спринтов одновременно. */
 
+/* ── Swipeable row wrapper: iOS Mail-style swipe-left-to-archive.
+   Только touch (pointerType === "touch"). Desktop/mouse — просто children.
+   Вертикальный dy > dx → отпускаем pointer, native scroll работает.
+   При пересечении threshold'а haptic pulse (preview — "это сработает").
+   При release выше threshold'а — haptic [10,30,10] + анимация исчезновения + onArchive.
+   touchAction:pan-y нужен чтобы браузер не отдал нам вертикальный swipe. */
+function SwipeableRow({ children, onArchive, disabled }) {
+  const [dx, setDx] = useState(0);
+  const [animating, setAnimating] = useState(false);
+  const state = useRef({ startX: 0, startY: 0, pointerId: null, hapticFired: false, isSwipe: false });
+  const THRESHOLD_RATIO = 0.35;
+
+  if (disabled) return children;
+
+  const onPointerDown = (e) => {
+    if (e.pointerType !== "touch") return;
+    state.current.startX = e.clientX;
+    state.current.startY = e.clientY;
+    state.current.pointerId = e.pointerId;
+    state.current.hapticFired = false;
+    state.current.isSwipe = false;
+    setAnimating(false);
+  };
+
+  const onPointerMove = (e) => {
+    if (state.current.pointerId !== e.pointerId) return;
+    const dxRaw = e.clientX - state.current.startX;
+    const dy = e.clientY - state.current.startY;
+
+    // Определяем направление один раз. Если вертикальное доминирует —
+    // отпускаем pointer, браузер берёт native scroll.
+    if (!state.current.isSwipe) {
+      if (Math.abs(dy) > Math.abs(dxRaw) && Math.abs(dy) > 6) {
+        state.current.pointerId = null;
+        return;
+      }
+      if (dxRaw < -6) {
+        state.current.isSwipe = true;
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+      } else {
+        return;
+      }
+    }
+
+    const d = Math.min(0, dxRaw);
+    setDx(d);
+
+    const rowWidth = e.currentTarget.offsetWidth || 300;
+    const threshold = -rowWidth * THRESHOLD_RATIO;
+    if (d < threshold && !state.current.hapticFired) {
+      haptic(15);
+      state.current.hapticFired = true;
+    } else if (d > threshold && state.current.hapticFired) {
+      haptic(5);
+      state.current.hapticFired = false;
+    }
+  };
+
+  const onPointerUp = (e) => {
+    if (state.current.pointerId !== e.pointerId) return;
+    state.current.pointerId = null;
+    const wasSwipe = state.current.isSwipe;
+    state.current.isSwipe = false;
+    if (!wasSwipe) return;
+
+    const rowWidth = e.currentTarget.offsetWidth || 300;
+    const threshold = -rowWidth * THRESHOLD_RATIO;
+    setAnimating(true);
+    if (dx < threshold) {
+      haptic([10, 30, 10]);
+      setDx(-rowWidth);
+      // onArchive через таймер чтобы CSS transition успела визуально сыграть.
+      setTimeout(() => onArchive(), 180);
+    } else {
+      setDx(0);
+    }
+  };
+
+  // Интенсивность red background: плавно появляется при swipe, полностью видно
+  // после ~20% пути. До этого — никакого flicker'а на micro-move'ах.
+  const bgOpacity = Math.min(1, Math.abs(dx) / 30);
+
+  return (
+    <div style={{ position: "relative", overflow: "hidden", borderRadius: 4, marginBottom: 4 }}>
+      <div
+        aria-hidden
+        style={{
+          position: "absolute", inset: 0,
+          background: "var(--danger)",
+          display: "flex", alignItems: "center", justifyContent: "flex-end",
+          paddingRight: 18,
+          color: "var(--accent-ink)",
+          fontSize: 18, fontWeight: 700,
+          opacity: bgOpacity,
+          pointerEvents: "none",
+        }}
+      >
+        ×
+      </div>
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        style={{
+          position: "relative",
+          transform: `translate3d(${dx}px, 0, 0)`,
+          transition: animating ? "transform 240ms var(--ease-spring-soft)" : "none",
+          background: "var(--surface)",
+          touchAction: "pan-y",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /* ── Task Row ── */
 function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDone, moveTargets = [], onMove, onOpen, narrow, t, lang }) {
   const [showMove, setShowMove] = useState(false);
@@ -1007,15 +1181,31 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
     // opacity ставим только на checkbox+content, НЕ на actions —
     // иначе выпадашка OverflowMenu внутри actions наследует прозрачность.
     const dim = task.done ? { opacity: 0.55 } : null;
+    // Long-press → контекстное меню. Native contextmenu event fires через
+    // 500ms holdом на iOS/Android touch. preventDefault убирает native
+    // "copy/share" бабл, haptic pulse подтверждает trigger, затем симулируем
+    // click по OverflowMenu trigger'у чтобы открыть наше меню.
+    const onLongPress = (e) => {
+      e.preventDefault();
+      haptic(10);
+      const btn = e.currentTarget.querySelector('[data-overflow-trigger]');
+      if (btn) btn.click();
+    };
     return (
-      <div style={{
-        display: "flex", alignItems: "flex-start", gap: 8,
-        marginBottom: 4, padding: "4px 0",
-      }} data-task-id={task.id}>
-        <div style={{ paddingTop: 3, ...dim }}>
-          <Checkbox checked={task.done} onChange={() => onToggleDone(task.id)} />
-        </div>
-        <div onClick={() => onOpen(task)} style={{ flex: 1, minWidth: 0, cursor: "pointer", ...dim }}>
+      <SwipeableRow onArchive={() => onSoftDelete(task.id)}>
+        <div
+          onContextMenu={onLongPress}
+          style={{
+            display: "flex", alignItems: "flex-start", gap: 8,
+            padding: "4px 0",
+            WebkitUserSelect: "none", userSelect: "none",
+          }}
+          data-task-id={task.id}
+        >
+          <div style={{ paddingTop: 3, ...dim }}>
+            <Checkbox checked={task.done} onChange={() => onToggleDone(task.id)} />
+          </div>
+          <div onClick={() => onOpen(task)} style={{ flex: 1, minWidth: 0, cursor: "pointer", ...dim }}>
           <div style={{
             ...(task.done ? { textDecoration: "line-through", color: "var(--fg-3)" } : {}),
             overflow: "hidden", textOverflow: "ellipsis",
@@ -1037,9 +1227,10 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
           {!hasMeta && (
             <div style={{ marginTop: 1, fontSize: 11, color: "var(--fg-4)", fontStyle: "italic" }}>{rel(task.createdAt, lang)}</div>
           )}
+          </div>
+          <div style={{ paddingTop: 1 }}>{actions}</div>
         </div>
-        <div style={{ paddingTop: 1 }}>{actions}</div>
-      </div>
+      </SwipeableRow>
     );
   }
 
@@ -1234,6 +1425,25 @@ export default function App() {
     document.documentElement.setAttribute("lang", lang);
   }, [lang]);
 
+  /* Dynamic theme-color — iOS status bar и Android system UI тянут цвет из
+     <meta name="theme-color">. Статические 2 meta (light/dark prefers-color)
+     не реагируют на наш JS-toggle темы. Обновляем активный meta при смене
+     темы → status bar мгновенно матчится. Точные hex'ы из index.html:
+     #fbfaf6 light, #141418 dark. */
+  useEffect(() => {
+    if (!theme) return;
+    const color = theme === "dark" ? "#141418" : "#fbfaf6";
+    // Убираем media-scoped meta'ы (они перебивают JS-updated), ставим один plain.
+    document.querySelectorAll('meta[name="theme-color"][media]').forEach(m => m.remove());
+    let meta = document.querySelector('meta[name="theme-color"]:not([media])');
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.setAttribute("name", "theme-color");
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute("content", color);
+  }, [theme]);
+
   // Toast auto-dismiss после 2 секунд
   useEffect(() => {
     if (!toast) return;
@@ -1278,6 +1488,48 @@ export default function App() {
     });
     return () => cancelAnimationFrame(id);
   }, [scrollTarget]);
+
+  // Offline indicator: toast при потере сети. Приложение работает оффлайн
+  // (localStorage), но feedback нужен — native-app не молчит. Не показываем
+  // при старте если already offline (только на transition), чтобы не спамить.
+  const online = useOnline();
+  const wasOnline = useRef(online);
+  useEffect(() => {
+    if (wasOnline.current !== online) {
+      setToast({
+        type: online ? "online" : "offline",
+        text: online
+          ? (lang === "ru" ? "Снова онлайн" : "Back online")
+          : (lang === "ru" ? "Офлайн — данные сохраняются локально" : "Offline — saved locally"),
+      });
+      wasOnline.current = online;
+    }
+  }, [online, lang]);
+
+  // URL shortcuts: обрабатываем ?shortcut=new-task / ?shortcut=archive от
+  // manifest shortcuts (long-press иконки PWA). После handling'а чистим URL
+  // через replaceState чтобы не сохранялось в history. Действие отложено до
+  // момента когда data уже загружена (первый sprint существует).
+  const shortcutHandledRef = useRef(false);
+  useEffect(() => {
+    if (shortcutHandledRef.current || !data) return;
+    const params = new URLSearchParams(window.location.search);
+    const shortcut = params.get("shortcut");
+    if (!shortcut) return;
+    shortcutHandledRef.current = true;
+    try {
+      window.history.replaceState({}, "", window.location.pathname);
+    } catch {}
+    if (shortcut === "new-task" && data.sprints?.length > 0) {
+      const inherited = data.activeProject && data.activeProject !== "none" ? data.activeProject : null;
+      const nt = mkTask("", inherited);
+      const s = [...data.sprints]; s[0] = { ...s[0], tasks: [nt, ...s[0].tasks] };
+      save({ ...data, sprints: s }, { skipUndo: true });
+      setModal({ type: "task", task: nt, source: { sprint: 0 } });
+    } else if (shortcut === "archive") {
+      save({ ...data, ui: { ...data.ui, archiveOpen: true } }, { skipUndo: true });
+    }
+  }, [data, save, setModal]);
 
   if (loading) return <div style={{ padding: 40, fontFamily: "monospace", color: "var(--fg-2)" }}>...</div>;
   if (!data) return null;
@@ -1458,12 +1710,14 @@ export default function App() {
       {!narrow && <Wordmark />}
 
       {/* Floating utility cluster — fixed top-right.
-         Undo (влево), потом lang + theme (preferences). */}
+         Undo (влево), потом lang + theme (preferences).
+         Лёгкий haptic(5) на каждом toggle — subtle acknowledgement, native feel. */}
       <UtilityCluster lang={lang} theme={theme} t={t} canUndo={canUndo} onUndo={doUndo}
         sort={data.sort}
-        onToggleSort={() => withTransition(() => uPref({ sort: data.sort === "desc" ? "asc" : "desc" }))}
-        onToggleLang={() => uPref({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } })}
+        onToggleSort={() => { haptic(5); withTransition(() => uPref({ sort: data.sort === "desc" ? "asc" : "desc" })); }}
+        onToggleLang={() => { haptic(5); uPref({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } }); }}
         onToggleTheme={() => {
+          haptic(5);
           const eff = theme || "light";
           uPref({ ui: { ...data.ui, theme: eff === "dark" ? "light" : "dark" } });
         }}
@@ -1480,7 +1734,7 @@ export default function App() {
 
       {/* Epics */}
       <div style={SEC}>
-        <div style={HRow}>
+        <div className="section-header">
           <span style={H}>{t("epics")}</span>
           <button onClick={() => {
             const ne = mkEpic(inheritedProject);
@@ -1520,11 +1774,14 @@ export default function App() {
         )}
       </div>
 
-      {/* Sprints header: симметричен Epics (та же стилистика, глобальный sort в toolbar) */}
-      <div style={HRow}>
-        <span style={H}>{t("sprints")}</span>
-        <button onClick={() => setShowNewSprint(v => !v)} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
-      </div>
+      {/* Sprints section — wrapped in SEC чтобы sticky header имел bounds:
+          когда user скроллит past Спринты, sticky уходит естественно. Без
+          wrapper'а sticky dragged бы до конца контейнера. */}
+      <div style={SEC}>
+        <div className="section-header">
+          <span style={H}>{t("sprints")}</span>
+          <button onClick={() => setShowNewSprint(v => !v)} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
+        </div>
 
       {/* Inline sprint creation form */}
       {showNewSprint && (
@@ -1600,6 +1857,7 @@ export default function App() {
           </div>
         );
       })}
+      </div>
 
       {/* Legacy "+ add sprint" footer link — убрано, создание через + в header'е. */}
       <div style={{ marginBottom: 32 }} />
@@ -1699,14 +1957,17 @@ function UtilityCluster({ lang, theme, t, canUndo, onUndo, sort, onToggleSort, o
 }
 
 /* ── Toast: короткое сообщение внизу экрана, исчезает через 2с.
-   Используется для feedback'а undo и других тихих действий. */
+   Используется для feedback'а undo и других тихих действий.
+   kbInset поднимает toast над soft keyboard — на мобиле undo triggered во
+   время редактирования не прячется под клавиатурой. */
 function Toast({ toast }) {
+  const kbInset = useKeyboardInset();
   if (!toast) return null;
   return (
     <div
       style={{
         position: "fixed",
-        bottom: "calc(16px + env(safe-area-inset-bottom))",
+        bottom: `calc(16px + env(safe-area-inset-bottom) + ${kbInset}px)`,
         left: "50%",
         transform: "translateX(-50%)",
         background: "var(--fg)",
@@ -1719,8 +1980,9 @@ function Toast({ toast }) {
         zIndex: 200,
         opacity: 0.92,
         letterSpacing: 0.2,
-        animation: "slide-up 200ms var(--ease-out-quart)",
+        animation: "slide-up 240ms var(--ease-spring-soft)",
         pointerEvents: "none",
+        transition: "bottom 200ms var(--ease-spring-soft)",
       }}
       role="status"
       aria-live="polite"

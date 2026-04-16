@@ -29,6 +29,28 @@ export default defineConfig({
           { src: "pwa-512x512.png", sizes: "512x512", type: "image/png" },
           { src: "maskable-icon-512x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
+        // Long-press app-icon shortcuts. URL params обрабатываются в App.jsx
+        // (setInitialAction → openTask / archiveOpen) + history.replaceState
+        // чтобы не засорять адресную строку после запуска.
+        shortcuts: [
+          {
+            name: "Новая задача",
+            short_name: "+ задача",
+            description: "Быстро добавить новую задачу",
+            url: "/?shortcut=new-task",
+            icons: [{ src: "pwa-192x192.png", sizes: "192x192", type: "image/png" }],
+          },
+          {
+            name: "Открыть архив",
+            short_name: "Архив",
+            description: "Показать архивные задачи и спринты",
+            url: "/?shortcut=archive",
+            icons: [{ src: "pwa-192x192.png", sizes: "192x192", type: "image/png" }],
+          },
+        ],
+        // launch_handler: при запуске из dock/home-screen реиспользовать окно
+        // вместо открытия нового таба. Chrome 102+, Safari тихо игнорит.
+        launch_handler: { client_mode: "navigate-existing" },
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,ico,webmanifest}"],

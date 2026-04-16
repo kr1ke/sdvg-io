@@ -2,7 +2,7 @@
 <html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="light dark" />
     <meta name="description" content="sdvg.io — минималистичный трекер задач: эпики, спринты, проекты. Работает офлайн." />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
@@ -79,6 +79,23 @@
         --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
         --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
         --ease-out-expo:  cubic-bezier(0.16, 1, 0.3, 1);
+        /* CSS linear() spring easings. Chrome 112+, Safari 18+, Firefox 122+.
+           --ease-spring — небольшой overshoot + settle, iOS-like.
+           --ease-spring-soft — без overshoot, smooth decelerate.
+           cubic-bezier не может передать физику пружины (overshoot/settle).
+           Fallback на cubic-bezier для старых браузеров (graceful). */
+        --ease-spring: linear(
+          0, 0.009, 0.035 2%, 0.141, 0.281 6.6%, 0.723 13.9%,
+          0.907, 1.023, 1.088, 1.117, 1.11, 1.072, 1.013,
+          0.976, 0.953, 0.94, 0.935, 0.936 47.3%, 0.949 52.9%,
+          0.979, 1.011, 1.029 70.1%, 1.028, 1.015, 1.002,
+          0.995, 0.992, 0.994, 1 94.3%, 1.001
+        );
+        --ease-spring-soft: linear(
+          0, 0.006, 0.025 2.6%, 0.101 6.4%, 0.539 23.4%, 0.68 29.6%,
+          0.803, 0.896 40.8%, 0.96, 1.004 52.5%, 1.02, 1.03, 1.027,
+          1.018 69.8%, 1.002 82.4%, 0.996
+        );
       }
 
       [data-theme="dark"] {
@@ -135,9 +152,13 @@
            pill-row и act-btn на узком viewport'е могут выходить за правую
            границу body на 2-4px. overflow-x:clip скрывает это без создания
            scroll-контейнера (в отличие от overflow-x:hidden который ломает
-           position:sticky). Fallback на hidden для старых браузеров. */
-        overflow-x: hidden;
+           position:sticky — он нам нужен для sticky section headers). */
         overflow-x: clip;
+        /* Prevent pull-to-refresh + chain-scrolling из drawer'а в body.
+           'contain' сохраняет iOS-style rubber band внутри scroll-containers,
+           но блокирует browser navigation gesture (PTR) на корне.
+           Native-app feel: refresh не то, что юзер ожидает от trackers'а. */
+        overscroll-behavior-y: contain;
       }
 
       body {
@@ -246,6 +267,37 @@
           background: color-mix(in oklab, var(--bg) 72%, transparent);
           -webkit-backdrop-filter: blur(14px) saturate(1.4);
           backdrop-filter: blur(14px) saturate(1.4);
+        }
+      }
+
+      /* Sticky section headers (Эпики, Спринты) — iOS Settings / Contacts style.
+         При скролле header стикается к верху viewport'а под safe-area-inset-top
+         (под notch на iPhone). Second header наступает и пушит первый — work out
+         of the box потому что обе section'ы wrapped в <div style={SEC}>.
+         Negative margin тянет фон на полную ширину контейнера (через padding),
+         blur показывает размытое содержимое под header'ом. */
+      .section-header {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        margin: 0 -14px 8px;
+        padding: 6px 14px;
+        position: sticky;
+        top: env(safe-area-inset-top);
+        z-index: 40;
+        background: var(--bg);
+      }
+      @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+        .section-header {
+          background: color-mix(in oklab, var(--bg) 76%, transparent);
+          -webkit-backdrop-filter: blur(12px) saturate(1.3);
+          backdrop-filter: blur(12px) saturate(1.3);
+        }
+      }
+      @media (min-width: 561px) {
+        .section-header {
+          margin: 0 -24px 8px;
+          padding: 6px 24px;
         }
       }
 
@@ -358,8 +410,8 @@
         to   { opacity: 1; }
       }
       .anim-sheet {
-        /* iOS-style: short, confident expo-out — без bounce, без opacity-фейда (только translate). */
-        animation: sheet-up 260ms var(--ease-out-expo);
+        /* iOS-style: smooth settle with soft spring (no overshoot, no opacity fade — только translate). */
+        animation: sheet-up 320ms var(--ease-spring-soft);
         will-change: transform;
       }
       .anim-sheet-overlay {
@@ -368,10 +420,11 @@
 
       /* Vaul drawer: нужен CSS для анимации enter/exit, Vaul управляет
          через data-state. Drag inline-стили Vaul перекрывают этот transform,
-         поэтому во время жеста наш transition не мешает. */
+         поэтому во время жеста наш transition не мешает.
+         --ease-spring-soft — iOS-like smooth settle без bounce. */
       [data-vaul-drawer-direction="bottom"] {
         transform: translate3d(0, 100%, 0);
-        transition: transform 300ms var(--ease-out-expo);
+        transition: transform 380ms var(--ease-spring-soft);
         will-change: transform;
       }
       [data-vaul-drawer-direction="bottom"][data-state="open"] {
@@ -386,15 +439,16 @@
 
       .anim-overlay { animation: fade-in var(--med) var(--ease-out-quart); }
       .anim-box {
-        animation: slide-up 280ms var(--ease-out-quint);
+        /* Desktop modal entrance — spring settles into final position, micro-overshoot. */
+        animation: slide-up 340ms var(--ease-spring);
         will-change: transform, opacity;
       }
       .anim-menu {
-        animation: menu-in 160ms var(--ease-out-quint);
+        animation: menu-in 180ms var(--ease-spring-soft);
         transform-origin: top right;
       }
-      .anim-row { animation: row-in 180ms var(--ease-out-quart); }
-      .cb-pulse { animation: cb-pulse 280ms var(--ease-out-quint); }
+      .anim-row { animation: row-in 220ms var(--ease-spring-soft); }
+      .cb-pulse { animation: cb-pulse 320ms var(--ease-spring); }
 
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after {
