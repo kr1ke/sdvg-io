@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { Drawer } from "vaul";
 
 /* Context для передачи "открытости" модалки из App в Sheet (мимо промежуточных
@@ -601,32 +602,64 @@ function ProjectTag({ project, maxWidth }) {
 }
 
 /* ── Overflow menu ── */
+/* Portal-based dropdown чтобы escape'ить parent overflow:hidden
+   (SwipeableRow wraps TaskRow с overflow:hidden для red-bg reveal). */
 function OverflowMenu({ items }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const btn = btnRef.current.getBoundingClientRect();
+    // Menu минимальная ширина 140. Прижимаем к правому краю кнопки.
+    const MIN_W = 140;
+    const left = Math.max(8, Math.min(window.innerWidth - MIN_W - 8, btn.right - MIN_W));
+    const top = btn.bottom + 4;
+    setPos({ top, left });
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onDoc = (e) => {
+      if (btnRef.current?.contains(e.target)) return;
+      if (menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onScroll = () => setOpen(false);
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("touchstart", onDoc, { passive: true });
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("touchstart", onDoc);
+      window.removeEventListener("scroll", onScroll, true);
+    };
   }, [open]);
+
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <>
       {/* data-overflow-trigger используется long-press handler'ом в TaskRow —
-          на контексте row'а находим этот button и триггерим click. Переиспользуем
-          существующую open/close логику вместо дублирования menu state. */}
-      <button data-overflow-trigger="" onClick={() => setOpen(o => !o)} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 16, lineHeight: 1 }}>…</button>
-      {open && (
-        <div className="anim-menu" style={O.dd}>
+          на контексте row'а находим этот button и триггерим click. */}
+      <button ref={btnRef} data-overflow-trigger="" onClick={() => setOpen(o => !o)}
+        className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 16, lineHeight: 1 }}>…</button>
+      {open && pos && createPortal(
+        <div ref={menuRef} className="anim-menu" style={{
+          position: "fixed", top: pos.top, left: pos.left, minWidth: 140, zIndex: 120,
+          background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5,
+          padding: 3, boxShadow: "var(--menu-shadow)",
+        }}>
           {items.map((it, i) => (
             <button key={i} onClick={() => { it.onClick(); setOpen(false); }}
               style={{ ...B, display: "block", padding: "8px 12px", fontSize: 12, color: it.danger ? "var(--danger)" : "var(--fg)", width: "100%", textAlign: "left" }}>
               {it.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 
@@ -1406,7 +1439,9 @@ export default function App() {
   const [isClosing, setIsClosing] = useState(false);
   const modalRef = useRef(null);
   const closeTimerRef = useRef(null);
-  const CLOSE_ANIM_MS = 320;
+  /* Matches drawer-slide-out duration в index.html (420ms). Если уменьшить —
+     React unmount'ит drawer до окончания animation'а и видно "прыжок". */
+  const CLOSE_ANIM_MS = 420;
 
   const setModal = useCallback((m) => {
     const prev = modalRef.current;
@@ -1452,6 +1487,30 @@ export default function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  /* Belt-and-suspenders scroll lock: Vaul ставит body[overflow:hidden] но это
+     не блокирует программный scroll и на iOS иногда даёт rubber-band за край.
+     Прижимаем body position:fixed с top=-scrollY → 100% lock. Восстанавливаем
+     scrollY при unmount. !isClosing чтобы lock снимался ПЕРЕД close-анимацией
+     (иначе страница прыгает прямо во время уезжания drawer'а). */
+  const isModalVisible = !!modal && !isClosing;
+  useEffect(() => {
+    if (!isModalVisible) return;
+    const scrollY = window.scrollY;
+    const body = document.body;
+    const prevPos = body.style.position;
+    const prevTop = body.style.top;
+    const prevWidth = body.style.width;
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.width = "100%";
+    return () => {
+      body.style.position = prevPos;
+      body.style.top = prevTop;
+      body.style.width = prevWidth;
+      window.scrollTo(0, scrollY);
+    };
+  }, [isModalVisible]);
 
   const lang = data?.ui?.lang || "en";
   const t = useMemo(() => tFn(lang), [lang]);
@@ -1778,6 +1837,12 @@ export default function App() {
 
       <Toast toast={toast} />
 
+      {/* .app-content wraps scrollable content (filter + sections + footer).
+         UtilityCluster/Wordmark/Toast остаются СНАРУЖИ чтобы transform их
+         не трогал (position:fixed child внутри transform'ed ancestor становится
+         позиционированным относительно ancestor'а, а не viewport'а). */}
+      <div className={`app-content${isModalVisible ? " app-backdrop" : ""}`}>
+
       {/* Filter bar (only if projects exist) */}
       {data.projects.length > 0 && (
         <FilterBar projects={data.projects} active={active} t={t}
@@ -1939,6 +2004,8 @@ export default function App() {
           <button onClick={() => setModal({ type: "projects" })} style={{ ...B, color: "var(--fg-3)", fontSize: 12, padding: "6px 0" }}>{t("projects").toLowerCase()}</button>
         )}
         <button onClick={() => setModal({ type: "reset" })} className="del-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12, padding: "6px 0" }}>{t("reset")}</button>
+      </div>
+
       </div>
     </div>
   );

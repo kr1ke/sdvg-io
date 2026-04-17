@@ -430,10 +430,10 @@
         animation: sheet-overlay 220ms var(--ease-out-quart);
       }
 
-      /* Vaul drawer: используем CSS @keyframes для enter/exit — CSS transition
-         не срабатывает потому что Vaul использует animation-name (не transform property
-         change) для open-state, и переход с animation-name на none не триггерит transition.
-         Keyframes на enter и exit гарантируют обе фазы анимации. */
+      /* Vaul drawer: CSS @keyframes для enter/exit (transition не срабатывает
+         потому что Vaul использует animation-name для open-state, а не transform
+         property change). forwards fill-mode — держим конечное состояние после
+         анимации чтобы избежать "прыжков" при переходе open↔closed. */
       @keyframes drawer-slide-in {
         from { transform: translate3d(0, 100%, 0); }
         to   { transform: translate3d(0, 0, 0); }
@@ -442,20 +442,37 @@
         from { transform: translate3d(0, 0, 0); }
         to   { transform: translate3d(0, 100%, 0); }
       }
+      @keyframes drawer-overlay-in {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+      }
+      @keyframes drawer-overlay-out {
+        from { opacity: 1; }
+        to   { opacity: 0; }
+      }
       [data-vaul-drawer-direction="bottom"] {
         will-change: transform;
+        /* Без forwards анимация "сбрасывает" transform на базовый в конце и
+           драуэр прыгает. forwards держит translate3d(0,0,0) после open. */
       }
       [data-vaul-drawer-direction="bottom"][data-state="open"] {
-        animation: drawer-slide-in 340ms var(--ease-spring-soft) forwards !important;
+        animation: drawer-slide-in 380ms var(--ease-spring-soft) forwards !important;
       }
       [data-vaul-drawer-direction="bottom"][data-state="closed"] {
-        animation: drawer-slide-out 320ms var(--ease-spring-soft) forwards !important;
+        /* Closer slightly slower than open per iOS Human Interface: feel более
+           "массивным" когда уезжает. 420ms matches drawer+overlay sync. */
+        animation: drawer-slide-out 420ms var(--ease-spring-soft) forwards !important;
       }
       [data-vaul-overlay] {
-        animation: sheet-overlay 220ms var(--ease-out-quart);
+        will-change: opacity;
+      }
+      [data-vaul-overlay][data-state="open"] {
+        animation: drawer-overlay-in 280ms var(--ease-out-quart) forwards !important;
       }
       [data-vaul-overlay][data-state="closed"] {
-        animation: sheet-overlay 180ms var(--ease-out-quart) reverse;
+        /* Sync с drawer close 420ms — иначе overlay исчезает раньше и видно
+           "пульсацию" фона пока drawer ещё уезжает. */
+        animation: drawer-overlay-out 420ms var(--ease-out-quart) forwards !important;
       }
 
       .anim-overlay { animation: fade-in var(--med) var(--ease-out-quart); }
@@ -480,6 +497,37 @@
         }
         .anim-overlay, .anim-box, .anim-menu, .anim-row {
           animation: fade-in 160ms var(--ease-out-quart) !important;
+        }
+        /* Убираем backdrop scale — лишнее движение для пользователей с
+           чувствительностью к motion. */
+        .app-backdrop { transform: none !important; }
+      }
+
+      /* iOS-style sheet presentation: scrollable content scales down slightly
+         когда drawer открывается → "карточка приподнялась над экраном".
+         .app-content обернут ВНУТРИ app root но НЕ содержит UtilityCluster/
+         Wordmark/Toast (они должны держать position:fixed относительно viewport,
+         а не transformed ancestor). */
+      @media (pointer: coarse) {
+        .app-content {
+          transition: transform 420ms var(--ease-spring-soft);
+          transform-origin: top center;
+        }
+        .app-content.app-backdrop {
+          transform: scale(0.96);
+        }
+      }
+
+      /* Pressed-state scale для tap feedback. Применяем на .icon-btn, .cb-btn
+         и .tap. 0.94 — лёгкий отклик, 100ms — почти мгновенно (iOS-like). */
+      @media (pointer: coarse) {
+        .tap, .icon-btn, .cb-btn {
+          transition: transform 100ms var(--ease-out-quart), opacity 100ms;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .tap:active, .icon-btn:active, .cb-btn:active {
+          transform: scale(0.94);
+          opacity: 0.8;
         }
       }
     </style>
