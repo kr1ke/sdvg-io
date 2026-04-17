@@ -694,7 +694,7 @@ const SR_ONLY = {
   position: "absolute", width: 1, height: 1, padding: 0, margin: -1,
   overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap", border: 0,
 };
-function Sheet({ children, onClose }) {
+function Sheet({ children, onClose, footer }) {
   const narrow = useNarrow();
   // Keyboard inset: когда user фокусит input внутри drawer'а, visualViewport
   // shrinks. Добавляем inset к paddingBottom drawer'а и к bottom Toast'а
@@ -707,7 +707,12 @@ function Sheet({ children, onClose }) {
   useEffect(() => { haptic(5); }, []);
   if (narrow) {
     return (
-      <Drawer.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      /* handleOnly: Vaul draggable только за <Drawer.Handle />, а не за любую
+         часть drawer'а. Это фиксит конфликт: дефолт Vaul блокирует drag когда
+         внутри есть scrollable контент и scrollTop!=0 → юзер "не может тянуть".
+         handleOnly убирает эту эвристику — handle всегда draggable, body
+         свободно скроллится. Native iOS sheet behaviour. */
+      <Drawer.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }} handleOnly>
         <Drawer.Portal>
           <Drawer.Overlay style={{
             position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100,
@@ -723,22 +728,16 @@ function Sheet({ children, onClose }) {
             position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 101,
             background: "var(--panel)", color: "var(--fg)",
             borderRadius: "16px 16px 0 0",
-            padding: "var(--modal-pad)",
-            paddingTop: 8,
-            /* Bottom padding: 28px breathing room + home-indicator inset + keyboard inset.
-               kbInset добавляется когда открыта soft keyboard (Visual Viewport API) —
-               кнопки save/cancel остаются видимыми над клавиатурой. */
-            paddingBottom: `calc(28px + env(safe-area-inset-bottom) + ${kbInset}px)`,
+            /* Paddings moved to inner body/footer — drawer сам padding:0
+               чтобы sticky footer дотягивался до краёв drawer'а без внутренних
+               полей (иначе визуальный гэп между footer'ом и рамкой drawer'а). */
+            padding: 0,
             maxHeight: "92dvh",
             boxShadow: "0 -10px 32px rgba(0, 0, 0, 0.18)",
             fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
             borderTop: "1px solid var(--line)",
             outline: "none",
             display: "flex", flexDirection: "column",
-            /* padding-bottom — smooth height transition когда keyboard toggle
-               (iOS soft-keyboard appear/dismiss). Transform anim живёт в index.html
-               через @keyframes drawer-slide-in/out + animation-name по data-state. */
-            transition: "padding-bottom 200ms var(--ease-spring-soft)",
           }}>
             {/* A11y: Vaul требует Title+Description, прячем через sr-only —
                 визуально повторять "Sheet" бессмысленно, смысл даёт контент. */}
@@ -747,16 +746,47 @@ function Sheet({ children, onClose }) {
             <Drawer.Handle style={{
               width: 40, height: 5, borderRadius: 3,
               background: "var(--line-2)",
-              margin: "6px auto 14px",
+              margin: "8px auto 10px",
               flexShrink: 0,
               cursor: "grab",
             }} />
-            {/* overflowX:hidden спасает от случайных горизонтальных вылазок
-                (длинная Select option, word без whitespace, wide textarea);
-                horizontal scrollbar в drawer'е выглядит сломанно. */}
-            <div style={{ overflowY: "auto", overflowX: "hidden", flex: 1, minHeight: 0, minWidth: 0 }}>
+            {/* overflowX:hidden спасает от случайных горизонтальных вылазок.
+                Padding горизонтальный — тут, чтобы dragable handle занимал
+                всю ширину drawer'а (не inset). */}
+            <div style={{
+              overflowY: "auto", overflowX: "hidden",
+              flex: 1, minHeight: 0, minWidth: 0,
+              padding: "0 var(--modal-pad)",
+              /* Прокрутка тела drawer'а не должна улетать в body scroll.
+                 contain — rubber-band внутри body, не на странице. */
+              overscrollBehavior: "contain",
+              WebkitOverflowScrolling: "touch",
+            }}>
               {children}
             </div>
+            {/* Sticky footer — только если передан. Отделён границей и фоном,
+                падает на keyboard inset. Здесь padding-bottom включает
+                home-indicator + keyboard inset → buttons всегда видны. */}
+            {footer && (
+              <div style={{
+                flexShrink: 0,
+                padding: `14px var(--modal-pad) calc(14px + env(safe-area-inset-bottom) + ${kbInset}px)`,
+                borderTop: "1px solid var(--line)",
+                background: "var(--panel)",
+                transition: "padding-bottom 200ms var(--ease-spring-soft)",
+              }}>
+                {footer}
+              </div>
+            )}
+            {/* Если footer не передан — оставляем нижний safe-area padding
+                на body, чтобы content не улетал под home-indicator. */}
+            {!footer && (
+              <div style={{
+                flexShrink: 0,
+                height: `calc(14px + env(safe-area-inset-bottom) + ${kbInset}px)`,
+                transition: "height 200ms var(--ease-spring-soft)",
+              }} />
+            )}
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
@@ -768,8 +798,121 @@ function Sheet({ children, onClose }) {
     <div className="anim-overlay" style={O.bg} onClick={onClose}>
       <div className="anim-box" style={O.box} onClick={e => e.stopPropagation()}>
         {children}
+        {footer && (
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--line)" }}>
+            {footer}
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+/* ── Action Sheet — bottom list of actions, iOS/Android-style.
+   Заменяет three-dot overflow dropdown на мобиле (2025 native pattern).
+   Используется для long-press на TaskRow / EpicRow. Каждое action — ряд 52px
+   (comfortable thumb target), заголовок + cancel-кнопка снизу с separator'ом.
+   Vaul-based: реиспользует ту же drawer-механику что и Sheet (handleOnly,
+   keyframes slide-in/out, backdrop scale, scroll lock). */
+function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) {
+  // Нужен немонтированный state → Vaul закрывает через onOpenChange(false),
+  // а мы unmount'им через timer как с Sheet (420ms close anim).
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) setMounted(true);
+    else if (mounted) {
+      const id = setTimeout(() => setMounted(false), 420);
+      return () => clearTimeout(id);
+    }
+  }, [open]);
+  useEffect(() => { if (open) haptic(8); }, [open]);
+  if (!mounted) return null;
+  return (
+    <Drawer.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }} handleOnly>
+      <Drawer.Portal>
+        <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100 }} />
+        <Drawer.Content
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          style={{
+            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 101,
+            background: "var(--panel)", color: "var(--fg)",
+            borderRadius: "16px 16px 0 0",
+            padding: 0,
+            boxShadow: "0 -10px 32px rgba(0, 0, 0, 0.18)",
+            fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
+            borderTop: "1px solid var(--line)",
+            outline: "none",
+            display: "flex", flexDirection: "column",
+            maxHeight: "70dvh",
+          }}>
+          <Drawer.Title style={SR_ONLY}>{title || "Actions"}</Drawer.Title>
+          <Drawer.Description style={SR_ONLY}>Action menu</Drawer.Description>
+          <Drawer.Handle style={{
+            width: 40, height: 5, borderRadius: 3,
+            background: "var(--line-2)",
+            margin: "8px auto 8px",
+            flexShrink: 0,
+          }} />
+          {title && (
+            <div style={{
+              padding: "6px 20px 10px",
+              fontSize: 12, color: "var(--fg-3)",
+              borderBottom: "1px solid var(--line)",
+              textAlign: "center",
+              fontStyle: "italic",
+              /* Long task names — ellipsis 2 lines max. */
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              wordBreak: "break-word",
+            }}>
+              {title}
+            </div>
+          )}
+          <div style={{ overflowY: "auto", overscrollBehavior: "contain" }}>
+            {actions.map((a, i) => (
+              <button
+                key={i}
+                onClick={() => { haptic(5); a.onClick(); onClose(); }}
+                className="tap"
+                style={{
+                  all: "unset", cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 14,
+                  width: "100%", boxSizing: "border-box",
+                  padding: "16px 20px",
+                  fontSize: 15,
+                  color: a.danger ? "var(--danger)" : "var(--fg)",
+                  fontWeight: a.primary ? 600 : 400,
+                  borderBottom: i < actions.length - 1 ? "1px solid var(--line)" : "none",
+                  minHeight: 52,
+                }}>
+                {a.icon && <span style={{ fontSize: 16, width: 20, textAlign: "center", color: a.danger ? "var(--danger)" : "var(--fg-3)" }}>{a.icon}</span>}
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.label}</span>
+              </button>
+            ))}
+          </div>
+          {/* Cancel — отдельная секция с gap, как iOS action sheet. */}
+          <button
+            onClick={() => { haptic(5); onClose(); }}
+            className="tap"
+            style={{
+              all: "unset", cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              padding: "14px 20px",
+              marginTop: 8,
+              borderTop: "1px solid var(--line)",
+              background: "var(--surface)",
+              fontSize: 14, fontWeight: 600,
+              color: "var(--fg-2)",
+              minHeight: 52,
+              paddingBottom: "calc(14px + env(safe-area-inset-bottom))",
+            }}>
+            {cancelLabel}
+          </button>
+        </Drawer.Content>
+      </Drawer.Portal>
+    </Drawer.Root>
   );
 }
 
@@ -808,9 +951,15 @@ function TaskModal({ task, allEpics, projects, sprints, onUpdate, onDelete, onCl
   const epicOpts = [{ value: "", label: t("none") }, ...allEpics.map(e => ({ value: e.id, label: e.text || t("untitled") }))];
   const projOpts = [{ value: "", label: t("noProject") }, ...projects.map(p => ({ value: p.id, label: p.name }))];
   const sprintOpts = sprints.map(s => ({ value: s.id, label: s.name }));
+  const footer = (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 14 }}>
+      <button onClick={cancel} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+      {!readOnly && <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
+    </div>
+  );
   return (
-    <Sheet onClose={cancel}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 6, gap: 8 }}>
+    <Sheet onClose={cancel} footer={footer}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 6, gap: 8, marginTop: 6 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             {readOnly ? (
               <div style={{ fontSize: 16, fontWeight: 600, color: "var(--fg)", lineHeight: 1.35, wordBreak: "break-word" }}>
@@ -862,11 +1011,6 @@ function TaskModal({ task, allEpics, projects, sprints, onUpdate, onDelete, onCl
           placeholder={t("notesPlaceholder")} rows={7}
           autoComplete="off" autoCapitalize="sentences" spellCheck
           style={O.textarea} />
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
-          <button onClick={cancel} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
-          {!readOnly && <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
-        </div>
     </Sheet>
   );
 }
@@ -877,9 +1021,15 @@ function SprintModal({ sprint, onUpdate, onClose, t }) {
   const [goal, setGoal] = useState(sprint.goal || "");
   const [desc, setDesc] = useState(sprint.desc || "");
   const save = () => { onUpdate({ ...sprint, name, goal, desc }); onClose(); };
+  const footer = (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 14 }}>
+      <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+      <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>
+    </div>
+  );
   return (
-    <Sheet onClose={onClose}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16 }}>
+    <Sheet onClose={onClose} footer={footer}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16, marginTop: 6 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)" }}>{t("sprintSettings")}</div>
           <button onClick={onClose} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18 }}>×</button>
         </div>
@@ -895,10 +1045,6 @@ function SprintModal({ sprint, onUpdate, onClose, t }) {
         <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder={t("contextPlaceholder")} rows={5}
           autoComplete="off" autoCapitalize="sentences" spellCheck
           style={O.textarea} />
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
-          <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
-          <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>
-        </div>
     </Sheet>
   );
 }
@@ -922,9 +1068,15 @@ function EpicModal({ epic, allTasks, projects, onUpdate, onDelete, onClose, onOp
     onClose();
   };
   const projOpts = [{ value: "", label: t("noProject") }, ...projects.map(p => ({ value: p.id, label: p.name }))];
+  const footer = (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 14 }}>
+      <button onClick={cancel} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+      {!readOnly && <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
+    </div>
+  );
   return (
-    <Sheet onClose={cancel}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16, gap: 12 }}>
+    <Sheet onClose={cancel} footer={footer}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16, marginTop: 6, gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <label style={O.label}>{t("epicName")}</label>
             {readOnly
@@ -954,20 +1106,20 @@ function EpicModal({ epic, allTasks, projects, onUpdate, onDelete, onClose, onOp
             {x.done && <span style={{ fontSize: 10, color: "var(--accent)" }}>{t("done")}</span>}
           </div>
         ))}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 22 }}>
-          <button onClick={cancel} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
-          {!readOnly && <button onClick={save} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("save")}</button>}
-        </div>
     </Sheet>
   );
 }
 
 /* ── Projects Modal ── */
 function ProjectsModal({ projects, onAdd, onRename, onDelete, onClose, t }) {
+  const footer = (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 14 }}>
+      <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("doneFooter")}</button>
+    </div>
+  );
   return (
-    <Sheet onClose={onClose}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16 }}>
+    <Sheet onClose={onClose} footer={footer}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16, marginTop: 6 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)" }}>{t("projects")}</div>
           <button onClick={onClose} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 18 }}>×</button>
         </div>
@@ -988,9 +1140,6 @@ function ProjectsModal({ projects, onAdd, onRename, onDelete, onClose, t }) {
         <div style={{ fontSize: 11, color: "var(--fg-3)", marginTop: 18, lineHeight: 1.5 }}>
           {t("deleteProjectHint")}
         </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 14 }}>
-          <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg)", fontSize: 13, fontWeight: 700, padding: "8px 4px" }}>{t("doneFooter")}</button>
-        </div>
     </Sheet>
   );
 }
@@ -1007,9 +1156,18 @@ function ResetModal({ onConfirm, onClose, t }) {
   const KW = "reset";
   const ok = val.trim().toLowerCase() === KW;
   const hint = t("resetTypeHint", KW);
+  const footer = (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 14 }}>
+      <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
+      <button onClick={ok ? onConfirm : undefined} disabled={!ok} className="sheet-action"
+        style={{ ...B, color: ok ? "var(--danger)" : "var(--fg-4)", fontSize: 13, fontWeight: 700, cursor: ok ? "pointer" : "default", padding: "8px 4px" }}>
+        {KW}
+      </button>
+    </div>
+  );
   return (
-    <Sheet onClose={onClose}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>{t("resetTitle")}</div>
+    <Sheet onClose={onClose} footer={footer}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)", marginBottom: 8, marginTop: 6 }}>{t("resetTitle")}</div>
         <div style={{ fontSize: 13, color: "var(--fg-2)", marginBottom: 18, lineHeight: 1.5 }}>
           {t("resetWarn")}{" "}
           {hint[0]}<span style={{ color: "var(--danger)", fontWeight: 700 }}>{hint[1]}</span>{hint[2]}
@@ -1019,13 +1177,6 @@ function ResetModal({ onConfirm, onClose, t }) {
           placeholder={t("resetPlaceholder")}
           autoComplete="off" autoCapitalize="off" autoCorrect="off" enterKeyHint="send" spellCheck={false}
           style={{ all: "unset", font: "inherit", fontSize: 14, width: "100%", padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 4, boxSizing: "border-box", color: "var(--fg)", background: "var(--bg)" }} />
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginTop: 18 }}>
-          <button onClick={onClose} className="sheet-action" style={{ ...B, color: "var(--fg-3)", fontSize: 13, padding: "8px 4px" }}>{t("cancel")}</button>
-          <button onClick={ok ? onConfirm : undefined} disabled={!ok} className="sheet-action"
-            style={{ ...B, color: ok ? "var(--danger)" : "var(--fg-4)", fontSize: 13, fontWeight: 700, cursor: ok ? "pointer" : "default", padding: "8px 4px" }}>
-            {KW}
-          </button>
-        </div>
     </Sheet>
   );
 }
@@ -1181,9 +1332,53 @@ function SwipeableRow({ children, onArchive, disabled }) {
   );
 }
 
+/* ── Epic Row ── wraps epic list row and handles mobile long-press → ActionSheet.
+   Extracted from inline JSX чтобы каждая строка имела свой sheetOpen state. */
+function EpicRow({ epic, count, project, onOpen, onArchive, narrow, t }) {
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const onLongPress = (e) => {
+    e.preventDefault();
+    haptic(10);
+    setSheetOpen(true);
+  };
+  const sheetActions = [
+    { label: t("open"), icon: "→", onClick: () => onOpen(epic) },
+    { label: t("archiveAction"), icon: "×", danger: true, onClick: () => onArchive(epic.id) },
+  ];
+  return (
+    <>
+      <div className="row" data-epic-id={epic.id}
+        onContextMenu={narrow ? onLongPress : undefined}
+        style={{
+          display: "flex", alignItems: "center", gap: 8, minHeight: 30,
+          ...(narrow ? { WebkitUserSelect: "none", userSelect: "none" } : null),
+        }}>
+        <div onClick={() => onOpen(epic)} style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0, cursor: "pointer" }}>
+          <span style={{ color: "var(--fg)" }}>
+            {epic.text || <span style={{ color: "var(--fg-4)", fontStyle: "italic" }}>{t("newEpic")}</span>}
+          </span>
+          {count > 0 && <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{count}</span>}
+          {project && <ProjectTag project={project} />}
+        </div>
+        {!narrow && (
+          <div className="row-actions" style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <button onClick={() => onOpen(epic)} title={t("open")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
+            <button onClick={() => onArchive(epic.id)} title={t("archiveAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
+          </div>
+        )}
+      </div>
+      {narrow && (
+        <ActionSheet open={sheetOpen} onClose={() => setSheetOpen(false)}
+          title={epic.text || t("newEpic")} actions={sheetActions} cancelLabel={t("cancel")} />
+      )}
+    </>
+  );
+}
+
 /* ── Task Row ── */
 function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDone, moveTargets = [], onMove, onOpen, narrow, t, lang }) {
   const [showMove, setShowMove] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const moveRef = useRef(null);
   useEffect(() => {
     if (!showMove) return;
@@ -1194,13 +1389,10 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
   const ep = allEpics.find(e => e.id === task.epicId);
   const pr = projects.find(p => p.id === task.projectId);
 
-  const actions = narrow ? (
-    <OverflowMenu items={[
-      ...(moveTargets.length > 0 ? moveTargets.map(m => ({ label: `→ ${m.label}`, onClick: () => onMove(task.id, m.key) })) : []),
-      { label: t("open"), onClick: () => onOpen(task) },
-      { label: t("archiveAction"), onClick: () => onSoftDelete(task.id), danger: true },
-    ]} />
-  ) : (
+  // Desktop keeps inline icon buttons. Mobile использует ActionSheet через
+  // long-press (ниже), без per-row "…" — native pattern 2025-26 (Things/
+  // Todoist/Reminders/Linear).
+  const actions = narrow ? null : (
     <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
       {moveTargets.length > 0 && (
         <div ref={moveRef} style={{ position: "relative" }}>
@@ -1226,20 +1418,22 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
   // Desktop: single dense row preserving the YouTrack-style rhythm.
   if (narrow) {
     const hasMeta = ep || pr;
-    // opacity ставим только на checkbox+content, НЕ на actions —
-    // иначе выпадашка OverflowMenu внутри actions наследует прозрачность.
     const dim = task.done ? { opacity: 0.55 } : null;
-    // Long-press → контекстное меню. Native contextmenu event fires через
-    // 500ms holdом на iOS/Android touch. preventDefault убирает native
-    // "copy/share" бабл, haptic pulse подтверждает trigger, затем симулируем
-    // click по OverflowMenu trigger'у чтобы открыть наше меню.
+    // Long-press → ActionSheet. Native contextmenu fires через 500ms holdом
+    // на iOS/Android touch. preventDefault убирает native "copy/share" бабл,
+    // haptic pulse подтверждает trigger. Replaces old three-dot dropdown.
     const onLongPress = (e) => {
       e.preventDefault();
       haptic(10);
-      const btn = e.currentTarget.querySelector('[data-overflow-trigger]');
-      if (btn) btn.click();
+      setSheetOpen(true);
     };
+    const sheetActions = [
+      { label: t("open"), icon: "→", onClick: () => onOpen(task) },
+      ...moveTargets.map(m => ({ label: m.label, icon: "⇄", onClick: () => onMove(task.id, m.key) })),
+      { label: t("archiveAction"), icon: "×", danger: true, onClick: () => onSoftDelete(task.id) },
+    ];
     return (
+      <>
       <SwipeableRow onArchive={() => onSoftDelete(task.id)}>
         <div
           onContextMenu={onLongPress}
@@ -1264,9 +1458,6 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
           {hasMeta && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 11, color: "var(--fg-3)", minWidth: 0 }}>
               {pr && <ProjectTag project={pr} maxWidth={110} />}
-              {/* Epic берёт всё оставшееся пространство между pill'ом и датой,
-                  усечение по ellipsis. Старый maxWidth:60% ломался при длинном
-                  project name — flex-распределение корректнее. */}
               {ep && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>#{ep.text}</span>}
               {!ep && <span style={{ flex: 1 }} />}
               <span style={{ fontStyle: "italic", color: "var(--fg-4)", flexShrink: 0 }}>{rel(task.createdAt, lang)}</span>
@@ -1276,9 +1467,11 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
             <div style={{ marginTop: 1, fontSize: 11, color: "var(--fg-4)", fontStyle: "italic" }}>{rel(task.createdAt, lang)}</div>
           )}
           </div>
-          <div style={{ paddingTop: 1 }}>{actions}</div>
         </div>
       </SwipeableRow>
+      <ActionSheet open={sheetOpen} onClose={() => setSheetOpen(false)}
+        title={task.text || t("newTask")} actions={sheetActions} cancelLabel={t("cancel")} />
+      </>
     );
   }
 
@@ -1864,27 +2057,16 @@ export default function App() {
           const cnt = allTasks.filter(tk => tk.epicId === e.id).length;
           const pr = data.projects.find(p => p.id === e.projectId);
           return (
-            <div key={e.id} className="row" data-epic-id={e.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 30 }}>
-  
-              <div onClick={() => openEpic(e)} style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0, cursor: "pointer" }}>
-                <span style={{ color: "var(--fg)" }}>
-                  {e.text || <span style={{ color: "var(--fg-4)", fontStyle: "italic" }}>{t("newEpic")}</span>}
-                </span>
-                {cnt > 0 && <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{cnt}</span>}
-                {pr && <ProjectTag project={pr} />}
-              </div>
-              {narrow ? (
-                <OverflowMenu items={[
-                  { label: t("open"), onClick: () => openEpic(e) },
-                  { label: t("archiveAction"), onClick: () => softArchiveEpic(e.id), danger: true },
-                ]} />
-              ) : (
-                <div className="row-actions" style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                  <button onClick={() => openEpic(e)} title={t("open")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
-                  <button onClick={() => softArchiveEpic(e.id)} title={t("archiveAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
-                </div>
-              )}
-            </div>
+            <EpicRow
+              key={e.id}
+              epic={e}
+              count={cnt}
+              project={pr}
+              onOpen={openEpic}
+              onArchive={softArchiveEpic}
+              narrow={narrow}
+              t={t}
+            />
           );
         })}
         {visibleEpics.length === 0 && data.epics.length > 0 && (
