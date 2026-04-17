@@ -529,6 +529,28 @@
           transform: scale(0.94);
           opacity: 0.8;
         }
+
+        /* Checkbox hit area: 20px визуальный круг, но тап-target 40×40.
+           invisible ::before pseudo-element расширяет кликабельную зону
+           без изменения визуального размера. WCAG AAA 44px compliance. */
+        .circle {
+          position: relative;
+        }
+        .circle::before {
+          content: "";
+          position: absolute;
+          inset: -10px;
+        }
+      }
+
+      /* Desktop: sheet-action также должны иметь минимальный tap/click target,
+         иначе 8px padding слишком маленький для комфортного клика мышью. */
+      @media (pointer: fine) {
+        .sheet-action {
+          min-height: 32px;
+          display: inline-flex;
+          align-items: center;
+        }
       }
     </style>
   </head>

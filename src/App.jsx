@@ -392,17 +392,49 @@ function Inline({ value, onSave, placeholder, style: s = {} }) {
 /* ── Custom Select ── */
 function Select({ value, onChange, options, placeholder = "—", disabled = false }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+  /* Portal dropdown чтобы escape'ить overflow:hidden wrappers (drawer body,
+     SwipeableRow). Раньше position:absolute inside scrollable drawer → дропдаун
+     клипался снизу. fixed + calculated position + z-index выше sticky/cluster. */
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const below = r.bottom + 2;
+    const MAX_H = 220;
+    const viewportH = window.innerHeight;
+    // Flip вверх если снизу не помещается.
+    const flipUp = below + MAX_H > viewportH - 20 && r.top > MAX_H + 20;
+    setPos({
+      top: flipUp ? Math.max(8, r.top - 2 - MAX_H) : below,
+      left: r.left,
+      width: r.width,
+      maxHeight: flipUp ? r.top - 10 : viewportH - below - 20,
+    });
+  }, [open]);
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onDoc = (e) => {
+      if (btnRef.current?.contains(e.target)) return;
+      if (menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onScroll = () => setOpen(false);
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("touchstart", onDoc, { passive: true });
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("touchstart", onDoc);
+      window.removeEventListener("scroll", onScroll, true);
+    };
   }, [open]);
   const current = options.find(o => o.value === value);
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <>
       <button
+        ref={btnRef}
         onClick={() => !disabled && setOpen(o => !o)}
         disabled={disabled}
         style={{
@@ -423,11 +455,12 @@ function Select({ value, onChange, options, placeholder = "—", disabled = fals
         </span>
         <span style={{ color: "var(--fg-3)", fontSize: 11, flexShrink: 0 }}>{open ? "▾" : "▸"}</span>
       </button>
-      {open && (
-        <div className="anim-menu" style={{
-          position: "absolute", top: "calc(100% + 2px)", left: 0, right: 0, zIndex: 20,
+      {open && pos && createPortal(
+        <div ref={menuRef} className="anim-menu" style={{
+          position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 120,
           background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 4,
-          maxHeight: 200, overflowY: "auto", boxShadow: "var(--menu-shadow)",
+          maxHeight: pos.maxHeight, overflowY: "auto", boxShadow: "var(--menu-shadow)",
+          overscrollBehavior: "contain",
         }}>
           {options.map(o => (
             <button
@@ -435,7 +468,7 @@ function Select({ value, onChange, options, placeholder = "—", disabled = fals
               onClick={() => { onChange(o.value); setOpen(false); }}
               style={{
                 all: "unset", display: "block", width: "100%", boxSizing: "border-box",
-                padding: "8px 10px", fontSize: 13, fontFamily: "inherit",
+                padding: "10px 10px", fontSize: 13, fontFamily: "inherit",
                 color: o.value === value ? "var(--fg)" : "var(--fg-2)", cursor: "pointer",
                 background: o.value === value ? "var(--surface-2)" : "transparent",
               }}
@@ -445,9 +478,10 @@ function Select({ value, onChange, options, placeholder = "—", disabled = fals
               {o.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 
@@ -602,67 +636,6 @@ function ProjectTag({ project, maxWidth }) {
 }
 
 /* ── Overflow menu ── */
-/* Portal-based dropdown чтобы escape'ить parent overflow:hidden
-   (SwipeableRow wraps TaskRow с overflow:hidden для red-bg reveal). */
-function OverflowMenu({ items }) {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState(null);
-  const btnRef = useRef(null);
-  const menuRef = useRef(null);
-
-  useLayoutEffect(() => {
-    if (!open || !btnRef.current) return;
-    const btn = btnRef.current.getBoundingClientRect();
-    // Menu минимальная ширина 140. Прижимаем к правому краю кнопки.
-    const MIN_W = 140;
-    const left = Math.max(8, Math.min(window.innerWidth - MIN_W - 8, btn.right - MIN_W));
-    const top = btn.bottom + 4;
-    setPos({ top, left });
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e) => {
-      if (btnRef.current?.contains(e.target)) return;
-      if (menuRef.current?.contains(e.target)) return;
-      setOpen(false);
-    };
-    const onScroll = () => setOpen(false);
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("touchstart", onDoc, { passive: true });
-    window.addEventListener("scroll", onScroll, true);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("touchstart", onDoc);
-      window.removeEventListener("scroll", onScroll, true);
-    };
-  }, [open]);
-
-  return (
-    <>
-      {/* data-overflow-trigger используется long-press handler'ом в TaskRow —
-          на контексте row'а находим этот button и триггерим click. */}
-      <button ref={btnRef} data-overflow-trigger="" onClick={() => setOpen(o => !o)}
-        className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 16, lineHeight: 1 }}>…</button>
-      {open && pos && createPortal(
-        <div ref={menuRef} className="anim-menu" style={{
-          position: "fixed", top: pos.top, left: pos.left, minWidth: 140, zIndex: 120,
-          background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5,
-          padding: 3, boxShadow: "var(--menu-shadow)",
-        }}>
-          {items.map((it, i) => (
-            <button key={i} onClick={() => { it.onClick(); setOpen(false); }}
-              style={{ ...B, display: "block", padding: "8px 12px", fontSize: 12, color: it.danger ? "var(--danger)" : "var(--fg)", width: "100%", textAlign: "left" }}>
-              {it.label}
-            </button>
-          ))}
-        </div>,
-        document.body
-      )}
-    </>
-  );
-}
-
 /* ── Hooks to resolve tasks/epics across the dataset ── */
 function useAllTasks(data, t) {
   return useMemo(() => {
@@ -818,6 +791,10 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
   // Нужен немонтированный state → Vaul закрывает через onOpenChange(false),
   // а мы unmount'им через timer как с Sheet (420ms close anim).
   const [mounted, setMounted] = useState(open);
+  // Keyboard inset — если ActionSheet открыт при фокусе input (rare, но
+  // возможно — например long-press пока textarea в focus), cancel-кнопка
+  // остаётся видимой над клавиатурой.
+  const kbInset = useKeyboardInset();
   useEffect(() => {
     if (open) setMounted(true);
     else if (mounted) {
@@ -825,7 +802,25 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
       return () => clearTimeout(id);
     }
   }, [open]);
-  useEffect(() => { if (open) haptic(8); }, [open]);
+  useEffect(() => { if (open) haptic(5); }, [open]);
+  /* Body scroll lock — Vaul ставит overflow:hidden на body но позволяет
+     programmatic scroll + на iOS иногда rubber-band за край. Прижимаем body
+     position:fixed (top=-scrollY) → 100% lock, как в App для Sheet. */
+  useEffect(() => {
+    if (!open) return;
+    const scrollY = window.scrollY;
+    const body = document.body;
+    const prev = { pos: body.style.position, top: body.style.top, width: body.style.width };
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.width = "100%";
+    return () => {
+      body.style.position = prev.pos;
+      body.style.top = prev.top;
+      body.style.width = prev.width;
+      window.scrollTo(0, scrollY);
+    };
+  }, [open]);
   if (!mounted) return null;
   return (
     <Drawer.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }} handleOnly>
@@ -892,7 +887,9 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
               </button>
             ))}
           </div>
-          {/* Cancel — отдельная секция с gap, как iOS action sheet. */}
+          {/* Cancel — отдельная секция с gap, как iOS action sheet.
+             paddingBottom включает env(safe-area-inset-bottom) + kbInset так
+             чтобы cancel всегда был над home-indicator/keyboard. */}
           <button
             onClick={() => { haptic(5); onClose(); }}
             className="tap"
@@ -906,7 +903,8 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
               fontSize: 14, fontWeight: 600,
               color: "var(--fg-2)",
               minHeight: 52,
-              paddingBottom: "calc(14px + env(safe-area-inset-bottom))",
+              paddingBottom: `calc(14px + env(safe-area-inset-bottom) + ${kbInset}px)`,
+              transition: "padding-bottom 200ms var(--ease-spring-soft)",
             }}>
             {cancelLabel}
           </button>
@@ -1202,7 +1200,15 @@ function FilterBar({ projects, active, onSelect, onOpenProjects, t }) {
             background: on ? "var(--active-bg)" : "var(--panel)",
             color: on ? "var(--active-fg)" : "var(--fg-2)",
             transition: "background var(--fast) ease-out, color var(--fast) ease-out, border-color var(--fast) ease-out",
-          }}>{it.label}</button>
+          }}>
+            {/* Длинное project name → span с ellipsis + max-width. Раньше
+                maxWidth на button ломал flex-sizing — текст ellipses'ился даже
+                при 3 символах. Теперь button sizes to content, span внутри
+                truncates только при реально длинных именах (>150px). */}
+            <span style={{ display: "inline-block", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
+              {it.label}
+            </span>
+          </button>
         );
       })}
       <button onClick={onOpenProjects} title={t("manageProjects")} className="icon-btn"
@@ -1329,6 +1335,41 @@ function SwipeableRow({ children, onArchive, disabled }) {
         {children}
       </div>
     </div>
+  );
+}
+
+/* ── Sprint Header Actions ── mobile: long-press на header → ActionSheet,
+   "+ задача" остаётся inline primary action. Desktop: все кнопки inline.
+   Раньше "…" dropdown на мобиле не консистентен с TaskRow/EpicRow. */
+function SprintHeaderActions({ onAddTask, onOpenSettings, onArchive, narrow, t, addTaskLabel }) {
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const onLongPress = (e) => {
+    e.preventDefault();
+    haptic(10);
+    setSheetOpen(true);
+  };
+  const sheetActions = [
+    { label: t("settings"), icon: "⚙", onClick: onOpenSettings },
+    { label: t("archiveSprintAction"), icon: "×", danger: true, onClick: onArchive },
+  ];
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: narrow ? 4 : 2, flexShrink: 0 }}
+        onContextMenu={narrow ? onLongPress : undefined}>
+        <button onClick={onAddTask}
+          title={addTaskLabel} className="act-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{addTaskLabel}</button>
+        {!narrow && (
+          <div className="row-actions" style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <button onClick={onOpenSettings} title={t("settings")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
+            <button onClick={onArchive} title={t("archiveSprintAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
+          </div>
+        )}
+      </div>
+      {narrow && (
+        <ActionSheet open={sheetOpen} onClose={() => setSheetOpen(false)}
+          actions={sheetActions} cancelLabel={t("cancel")} />
+      )}
+    </>
   );
 }
 
@@ -2114,8 +2155,9 @@ export default function App() {
                   placeholder={t("sprint")} style={{ fontSize: 15, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: "0 1 auto" }} />
                 <Progress done={doneCount} total={total} />
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: narrow ? 4 : 2, flexShrink: 0 }}>
-                <button onClick={() => {
+              <SprintHeaderActions
+                narrow={narrow} t={t} addTaskLabel={t("addTask")}
+                onAddTask={() => {
                   // Prepend + auto-open modal (P2.3 flow):
                   // создаём draft-задачу вверху спринта и сразу открываем карточку
                   // с фокусом на title — пользователь пишет имя, опц. заполняет desc/epic.
@@ -2124,19 +2166,9 @@ export default function App() {
                   u({ sprints: s });
                   openTask(nt, { sprint: si });
                 }}
-                  title={t("addTask")} className="act-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{t("addTask")}</button>
-                {narrow ? (
-                  <OverflowMenu items={[
-                    { label: t("settings"), onClick: () => openSprint(si) },
-                    { label: t("archiveSprintAction"), onClick: () => softArchiveSprint(si), danger: true },
-                  ]} />
-                ) : (
-                  <div className="row-actions" style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                    <button onClick={() => openSprint(si)} title={t("settings")} className="icon-btn" style={{ ...B, color: "var(--fg-3)", fontSize: 12 }}>≡</button>
-                    <button onClick={() => softArchiveSprint(si)} title={t("archiveSprintAction")} className="icon-btn" style={{ ...B, color: "var(--fg-3)" }}>×</button>
-                  </div>
-                )}
-              </div>
+                onOpenSettings={() => openSprint(si)}
+                onArchive={() => softArchiveSprint(si)}
+              />
             </div>
             {sp.goal && <div style={{ fontSize: 12, color: "var(--fg-3)", marginTop: 4, fontStyle: "italic" }}>{sp.goal}</div>}
             <div style={{ marginTop: 8 }}>
