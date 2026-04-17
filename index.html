@@ -10,7 +10,11 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- black-translucent: edge-to-edge в iOS PWA. Status bar становится
+         прозрачным, наш dynamic theme-color (JS) управляет фоном под ним.
+         safe-area-inset-top нужен для padding topbar'а чтобы контент не
+         прятался под status bar. "default" — non-translucent fallback. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="sdvg.io" />
     <meta name="theme-color" content="#fbfaf6" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#141418" media="(prefers-color-scheme: dark)" />
@@ -299,6 +303,16 @@
           margin: 0 -24px 8px;
           padding: 6px 24px;
         }
+      }
+      /* Scroll shadow — header "приподнимается" над контентом когда user
+         скроллит и контент уезжает под header. iOS-like эффект глубины.
+         Триггерится data-stuck через IntersectionObserver (sentinel в App.jsx).
+         Transition плавный (180ms) чтобы shadow не "прыгал" при scroll events. */
+      .section-header {
+        transition: box-shadow 180ms var(--ease-out-quart);
+      }
+      .section-header[data-stuck="true"] {
+        box-shadow: 0 4px 10px -6px oklch(0% 0 0 / 0.12);
       }
 
       /* Utility cluster (RU/EN, тема) — CSS-only hover чтобы не было sticky-эффекта на тач:

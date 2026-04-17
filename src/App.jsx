@@ -13,11 +13,61 @@ const KEY = "tracker-v6";
 const uid = () => Math.random().toString(36).slice(2, 9);
 const now = () => Date.now();
 
-/* Тактильный отклик. iOS Safari не поддерживает Vibration API (silently no-ops),
-   Android/Chromium — работает. ~10ms = acknowledgement, [10,30,10] = destructive. */
+/* Тактильный отклик. 2 канала:
+   (1) navigator.vibrate для Android/Chromium (работает из коробки).
+   (2) iOS Safari 17.4+ hack — скрытый <input type="checkbox" switch>,
+       клик по label триггерит Taptic Engine (real hardware pulse).
+       navigator.vibrate на iOS = silent no-op, поэтому без этого хака
+       весь haptic feedback был бы пропущен на iPhone.
+   Taxonomy (как в Apple UIFeedbackGenerator):
+     Light    — selection, tap confirm (5ms / 1 pulse)
+     Medium   — threshold cross, drawer open (10ms / 1 pulse)
+     Heavy    — long-press trigger (15ms / 1 pulse)
+     Success  — archive, save (2 pulses [10,30,10])
+     Warning  — destructive intent (3 pulses [15,50,15,50,15])
+     Error    — нет, не используем (отличия от Success неощутимы на web) */
+const IOS_HAPTIC_ID = "__ios_haptic_switch";
+const isIOS = typeof navigator !== "undefined" && (
+  /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+);
+const ensureIOSHaptic = () => {
+  if (!isIOS || typeof document === "undefined") return null;
+  let el = document.getElementById(IOS_HAPTIC_ID);
+  if (el) return el;
+  el = document.createElement("label");
+  el.id = IOS_HAPTIC_ID;
+  el.setAttribute("aria-hidden", "true");
+  el.style.cssText = "position:absolute;left:-9999px;opacity:0;pointer-events:none;width:0;height:0;";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.setAttribute("switch", "");
+  input.setAttribute("aria-hidden", "true");
+  input.tabIndex = -1;
+  el.appendChild(input);
+  document.body.appendChild(el);
+  return el;
+};
+const iosPulse = (count = 1) => {
+  const el = ensureIOSHaptic();
+  if (!el) return;
+  for (let i = 0; i < count; i++) {
+    setTimeout(() => { try { el.click(); } catch {} }, i * 60);
+  }
+};
 const haptic = (pattern = 10) => {
   try { navigator.vibrate?.(pattern); } catch {}
+  if (isIOS) {
+    const count = Array.isArray(pattern) ? Math.ceil(pattern.length / 2) : 1;
+    iosPulse(count);
+  }
 };
+/* Semantic variants — предпочтительны перед raw haptic(). */
+const hapticLight   = () => haptic(5);
+const hapticMedium  = () => haptic(10);
+const hapticHeavy   = () => haptic(15);
+const hapticSuccess = () => haptic([10, 30, 10]);
+const hapticWarning = () => haptic([15, 50, 15, 50, 15]);
 
 /* View Transitions API: плавный crossfade для state-swap'ов (фильтр, архив,
    сортировка). Поддерживается в Chrome/Edge/Firefox/Safari 18+. Fallback —
@@ -677,7 +727,7 @@ function Sheet({ children, onClose, footer }) {
   // close-анимацию. Default true для legacy-путей без Provider (fallback).
   const open = useContext(ModalOpenContext);
   // Haptic pulse при открытии drawer'а — лёгкий acknowledgement как в iOS.
-  useEffect(() => { haptic(5); }, []);
+  useEffect(() => { hapticMedium(); }, []);
   if (narrow) {
     return (
       /* handleOnly: Vaul draggable только за <Drawer.Handle />, а не за любую
@@ -705,7 +755,12 @@ function Sheet({ children, onClose, footer }) {
                чтобы sticky footer дотягивался до краёв drawer'а без внутренних
                полей (иначе визуальный гэп между footer'ом и рамкой drawer'а). */
             padding: 0,
-            maxHeight: "92dvh",
+            /* svh (small viewport height) стабильнее dvh на iOS при collapse
+               address-bar (dvh пересчитывается → content jumps). min()
+               обеспечивает разумный cap для landscape / коротких экранов:
+               на 844×390 portrait drawer = 776px (92svh), на 390×844 landscape
+               = 359px (92svh) что удобно. Без cap был 92dvh = весь экран. */
+            maxHeight: "min(92svh, 680px)",
             boxShadow: "0 -10px 32px rgba(0, 0, 0, 0.18)",
             fontFamily: "'SF Mono','Menlo','Consolas',ui-monospace,monospace",
             borderTop: "1px solid var(--line)",
@@ -802,13 +857,14 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
       return () => clearTimeout(id);
     }
   }, [open]);
-  useEffect(() => { if (open) haptic(5); }, [open]);
+  useEffect(() => { if (open) hapticMedium(); }, [open]);
   /* Body scroll lock — Vaul ставит overflow:hidden на body но позволяет
      programmatic scroll + на iOS иногда rubber-band за край. Прижимаем body
-     position:fixed (top=-scrollY) → 100% lock, как в App для Sheet. */
+     position:fixed (top=-scrollY) → 100% lock, как в App для Sheet.
+     Math.round предотвращает Safari fractional-pixel drift при restore. */
   useEffect(() => {
     if (!open) return;
-    const scrollY = window.scrollY;
+    const scrollY = Math.round(window.scrollY);
     const body = document.body;
     const prev = { pos: body.style.position, top: body.style.top, width: body.style.width };
     body.style.position = "fixed";
@@ -821,6 +877,31 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
       window.scrollTo(0, scrollY);
     };
   }, [open]);
+  /* Android back-button / swipe-back → closes ActionSheet, not exits app.
+     CloseWatcher API (Chrome 120+) — predictive-back aware, не пушит history.
+     Fallback для Safari/Firefox — history.pushState + popstate.
+     Race-avoidance: при onClick action'а (который может open'нуть Sheet →
+     push new state), cleanup проверяет history.state?.actionSheet перед pop,
+     чтобы не схлопнуть свеже-пушенный Sheet state. */
+  useEffect(() => {
+    if (!open) return;
+    // Prefer CloseWatcher (no history pollution)
+    if (typeof window.CloseWatcher !== "undefined") {
+      const cw = new window.CloseWatcher();
+      cw.onclose = () => onClose();
+      return () => cw.destroy();
+    }
+    // Fallback
+    try { history.pushState({ sdvgActionSheet: true }, ""); } catch {}
+    const onPop = () => onClose();
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      if (history.state?.sdvgActionSheet) {
+        try { history.back(); } catch {}
+      }
+    };
+  }, [open, onClose]);
   if (!mounted) return null;
   return (
     <Drawer.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }} handleOnly>
@@ -838,7 +919,9 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
             borderTop: "1px solid var(--line)",
             outline: "none",
             display: "flex", flexDirection: "column",
-            maxHeight: "70dvh",
+            /* svh + cap — same как Sheet. ActionSheet обычно короче (3-5 actions)
+               поэтому 70% достаточно + 500px cap на landscape чтобы не тянуться. */
+            maxHeight: "min(70svh, 500px)",
           }}>
           <Drawer.Title style={SR_ONLY}>{title || "Actions"}</Drawer.Title>
           <Drawer.Description style={SR_ONLY}>Action menu</Drawer.Description>
@@ -869,7 +952,7 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
             {actions.map((a, i) => (
               <button
                 key={i}
-                onClick={() => { haptic(5); a.onClick(); onClose(); }}
+                onClick={() => { hapticLight(); a.onClick(); onClose(); }}
                 className="tap"
                 style={{
                   all: "unset", cursor: "pointer",
@@ -891,7 +974,7 @@ function ActionSheet({ open, onClose, title, actions, cancelLabel = "cancel" }) 
              paddingBottom включает env(safe-area-inset-bottom) + kbInset так
              чтобы cancel всегда был над home-indicator/keyboard. */}
           <button
-            onClick={() => { haptic(5); onClose(); }}
+            onClick={() => { hapticLight(); onClose(); }}
             className="tap"
             style={{
               all: "unset", cursor: "pointer",
@@ -1224,15 +1307,43 @@ function FilterBar({ projects, active, onSelect, onOpenProjects, t }) {
    Только touch (pointerType === "touch"). Desktop/mouse — просто children.
    Вертикальный dy > dx → отпускаем pointer, native scroll работает.
    При пересечении threshold'а haptic pulse (preview — "это сработает").
-   При release выше threshold'а — haptic [10,30,10] + анимация исчезновения + onArchive.
-   touchAction:pan-y нужен чтобы браузер не отдал нам вертикальный swipe. */
-function SwipeableRow({ children, onArchive, disabled }) {
+   touchAction:pan-y нужен чтобы браузер не отдал нам вертикальный swipe.
+
+   Commit detection (2026 native parity):
+   • Distance threshold (35%) ИЛИ
+   • Velocity threshold: |vx| > 0.5 px/ms (leftward flick) — считаем
+     по ring-buffer'у последних samples за 100ms, старше не используем
+     (noise). Vaul/Motion/Things/Apple Mail используют ~0.4-0.5.
+   Label hint: "× Архив" fade-in по progress (0→100% at threshold). */
+function SwipeableRow({ children, onArchive, disabled, label = "архив" }) {
   const [dx, setDx] = useState(0);
   const [animating, setAnimating] = useState(false);
-  const state = useRef({ startX: 0, startY: 0, pointerId: null, hapticFired: false, isSwipe: false });
+  const state = useRef({
+    startX: 0, startY: 0, pointerId: null, hapticFired: false, isSwipe: false,
+    samples: [],  // ring buffer: { x, t }
+  });
   const THRESHOLD_RATIO = 0.35;
+  const VELOCITY_THRESHOLD = 0.5; // px/ms — leftward flick commits
 
   if (disabled) return children;
+
+  const pushSample = (x, t) => {
+    const s = state.current.samples;
+    s.push({ x, t });
+    // Keep only last 100ms
+    const cutoff = t - 100;
+    while (s.length > 1 && s[0].t < cutoff) s.shift();
+  };
+
+  const computeVelocity = () => {
+    const s = state.current.samples;
+    if (s.length < 2) return 0;
+    const first = s[0];
+    const last = s[s.length - 1];
+    const dt = last.t - first.t;
+    if (dt <= 0) return 0;
+    return (last.x - first.x) / dt; // px/ms; negative = leftward
+  };
 
   const onPointerDown = (e) => {
     if (e.pointerType !== "touch") return;
@@ -1241,6 +1352,7 @@ function SwipeableRow({ children, onArchive, disabled }) {
     state.current.pointerId = e.pointerId;
     state.current.hapticFired = false;
     state.current.isSwipe = false;
+    state.current.samples = [{ x: e.clientX, t: e.timeStamp }];
     setAnimating(false);
   };
 
@@ -1266,14 +1378,15 @@ function SwipeableRow({ children, onArchive, disabled }) {
 
     const d = Math.min(0, dxRaw);
     setDx(d);
+    pushSample(e.clientX, e.timeStamp);
 
     const rowWidth = e.currentTarget.offsetWidth || 300;
     const threshold = -rowWidth * THRESHOLD_RATIO;
     if (d < threshold && !state.current.hapticFired) {
-      haptic(15);
+      hapticHeavy();
       state.current.hapticFired = true;
     } else if (d > threshold && state.current.hapticFired) {
-      haptic(5);
+      hapticLight();
       state.current.hapticFired = false;
     }
   };
@@ -1287,20 +1400,28 @@ function SwipeableRow({ children, onArchive, disabled }) {
 
     const rowWidth = e.currentTarget.offsetWidth || 300;
     const threshold = -rowWidth * THRESHOLD_RATIO;
+    const velocity = computeVelocity();
+    // Commit if distance crossed OR fast leftward flick.
+    const flicked = velocity < -VELOCITY_THRESHOLD;
+    const shouldCommit = dx < threshold || flicked;
     setAnimating(true);
-    if (dx < threshold) {
-      haptic([10, 30, 10]);
+    if (shouldCommit) {
+      if (!state.current.hapticFired) hapticHeavy(); // flick below threshold → give feedback
+      hapticSuccess();
       setDx(-rowWidth);
-      // onArchive через таймер чтобы CSS transition успела визуально сыграть.
       setTimeout(() => onArchive(), 180);
     } else {
       setDx(0);
     }
+    state.current.samples = [];
   };
 
-  // Интенсивность red background: плавно появляется при swipe, полностью видно
-  // после ~20% пути. До этого — никакого flicker'а на micro-move'ах.
+  // Red background opacity: 0→1 as user swipes 0→30px.
   const bgOpacity = Math.min(1, Math.abs(dx) / 30);
+  // Label progress: 0→1 по достижению threshold. Чётче подсказка чем просто цвет.
+  // Используем ref-based rowWidth estimate (offsetWidth доступен после mount'а,
+  // но тут JSX render — берём 300 как fallback; CSS var не используем чтобы не усложнять).
+  const labelProgress = Math.min(1, Math.abs(dx) / 120);
 
   return (
     <div style={{ position: "relative", overflow: "hidden", borderRadius: 4, marginBottom: 4 }}>
@@ -1310,14 +1431,23 @@ function SwipeableRow({ children, onArchive, disabled }) {
           position: "absolute", inset: 0,
           background: "var(--danger)",
           display: "flex", alignItems: "center", justifyContent: "flex-end",
+          gap: 8,
           paddingRight: 18,
           color: "var(--accent-ink)",
-          fontSize: 18, fontWeight: 700,
+          fontSize: 13, fontWeight: 600,
           opacity: bgOpacity,
           pointerEvents: "none",
         }}
       >
-        ×
+        {/* Label fades-in и slide-in'ится как user swipes дальше. */}
+        <span style={{
+          opacity: labelProgress,
+          transform: `translateX(${(1 - labelProgress) * 20}px)`,
+          transition: "opacity 80ms linear, transform 80ms linear",
+          textTransform: "lowercase",
+          letterSpacing: 0.3,
+        }}>{label}</span>
+        <span style={{ fontSize: 20, lineHeight: 1 }}>×</span>
       </div>
       <div
         onPointerDown={onPointerDown}
@@ -1341,11 +1471,11 @@ function SwipeableRow({ children, onArchive, disabled }) {
 /* ── Sprint Header Actions ── mobile: long-press на header → ActionSheet,
    "+ задача" остаётся inline primary action. Desktop: все кнопки inline.
    Раньше "…" dropdown на мобиле не консистентен с TaskRow/EpicRow. */
-function SprintHeaderActions({ onAddTask, onOpenSettings, onArchive, narrow, t, addTaskLabel }) {
+function SprintHeaderActions({ onAddTask, onOpenSettings, onArchive, narrow, t, addTaskLabel, title }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const onLongPress = (e) => {
     e.preventDefault();
-    haptic(10);
+    hapticHeavy();
     setSheetOpen(true);
   };
   const sheetActions = [
@@ -1354,7 +1484,11 @@ function SprintHeaderActions({ onAddTask, onOpenSettings, onArchive, narrow, t, 
   ];
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: narrow ? 4 : 2, flexShrink: 0 }}
+      <div style={{
+          display: "flex", alignItems: "center", gap: narrow ? 4 : 2, flexShrink: 0,
+          /* iOS: отключаем native long-press bubble. */
+          ...(narrow ? { WebkitTouchCallout: "none", WebkitUserSelect: "none", userSelect: "none" } : null),
+        }}
         onContextMenu={narrow ? onLongPress : undefined}>
         <button onClick={onAddTask}
           title={addTaskLabel} className="act-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 12 }}>{addTaskLabel}</button>
@@ -1367,7 +1501,7 @@ function SprintHeaderActions({ onAddTask, onOpenSettings, onArchive, narrow, t, 
       </div>
       {narrow && (
         <ActionSheet open={sheetOpen} onClose={() => setSheetOpen(false)}
-          actions={sheetActions} cancelLabel={t("cancel")} />
+          title={title} actions={sheetActions} cancelLabel={t("cancel")} />
       )}
     </>
   );
@@ -1379,7 +1513,7 @@ function EpicRow({ epic, count, project, onOpen, onArchive, narrow, t }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const onLongPress = (e) => {
     e.preventDefault();
-    haptic(10);
+    hapticHeavy();
     setSheetOpen(true);
   };
   const sheetActions = [
@@ -1392,7 +1526,16 @@ function EpicRow({ epic, count, project, onOpen, onArchive, narrow, t }) {
         onContextMenu={narrow ? onLongPress : undefined}
         style={{
           display: "flex", alignItems: "center", gap: 8, minHeight: 30,
-          ...(narrow ? { WebkitUserSelect: "none", userSelect: "none" } : null),
+          /* viewTransitionName — уникальный id для View Transitions API.
+             При archive → row "улетает" плавно (crossfade+position morph)
+             вместо instant vanish. contain:layout подсказывает браузеру,
+             что rows — разные элементы. */
+          viewTransitionName: `epic-${epic.id}`,
+          /* WebkitTouchCallout: none — отключает iOS native long-press bubble
+             ("copy/share/look up"), который перекрывал наш onContextMenu и
+             блокировал открытие ActionSheet. Без него long-press на iOS
+             запускал системное меню вместо нашего. */
+          ...(narrow ? { WebkitUserSelect: "none", userSelect: "none", WebkitTouchCallout: "none" } : null),
         }}>
         <div onClick={() => onOpen(epic)} style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0, cursor: "pointer" }}>
           <span style={{ color: "var(--fg)" }}>
@@ -1465,7 +1608,7 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
     // haptic pulse подтверждает trigger. Replaces old three-dot dropdown.
     const onLongPress = (e) => {
       e.preventDefault();
-      haptic(10);
+      hapticHeavy();
       setSheetOpen(true);
     };
     const sheetActions = [
@@ -1475,13 +1618,18 @@ function TaskRow({ task, allEpics, projects, onUpdate, onSoftDelete, onToggleDon
     ];
     return (
       <>
-      <SwipeableRow onArchive={() => onSoftDelete(task.id)}>
+      <SwipeableRow onArchive={() => onSoftDelete(task.id)} label={t("archiveAction")}>
         <div
           onContextMenu={onLongPress}
           style={{
             display: "flex", alignItems: "flex-start", gap: 8,
             padding: "4px 0",
-            WebkitUserSelect: "none", userSelect: "none",
+            /* viewTransitionName — task-specific identity для View Transitions.
+               softArchiveTask обёрнут в withTransition → browser crossfade'ит row. */
+            viewTransitionName: `task-${task.id}`,
+            /* WebkitTouchCallout: none — предотвращает iOS native long-press
+               menu (copy/share/look up) который перехватывает жест. */
+            WebkitUserSelect: "none", userSelect: "none", WebkitTouchCallout: "none",
           }}
           data-task-id={task.id}
         >
@@ -1730,19 +1878,26 @@ export default function App() {
   const isModalVisible = !!modal && !isClosing;
   useEffect(() => {
     if (!isModalVisible) return;
-    const scrollY = window.scrollY;
+    /* Math.round чтобы Safari не давал fractional-pixel drift при restore
+       (1-2px съезд при unlock). scroll-anchor:auto (default) может re-anchor
+       при реflow → добавляем overflow-anchor:none на html. */
+    const scrollY = Math.round(window.scrollY);
     const body = document.body;
+    const html = document.documentElement;
     const prevPos = body.style.position;
     const prevTop = body.style.top;
     const prevWidth = body.style.width;
+    const prevAnchor = html.style.overflowAnchor;
     body.style.position = "fixed";
     body.style.top = `-${scrollY}px`;
     body.style.width = "100%";
+    html.style.overflowAnchor = "none";
     return () => {
       body.style.position = prevPos;
       body.style.top = prevTop;
       body.style.width = prevWidth;
-      window.scrollTo(0, scrollY);
+      html.style.overflowAnchor = prevAnchor;
+      window.scrollTo({ top: scrollY, behavior: "instant" });
     };
   }, [isModalVisible]);
 
@@ -1798,7 +1953,7 @@ export default function App() {
   const doUndo = useCallback(async () => {
     const prev = await undo();
     if (prev) {
-      haptic(20);
+      hapticSuccess();
       setToast({ type: "undo", text: lang === "ru" ? "Отменено" : "Undone" });
     }
   }, [undo, lang]);
@@ -1906,7 +2061,7 @@ export default function App() {
   const toggleDone = (si, id) => {
     const s = [...data.sprints];
     s[si] = { ...s[si], tasks: s[si].tasks.map(t => t.id === id ? { ...t, done: !t.done } : t) };
-    haptic(10);
+    hapticMedium();
     u({ sprints: s });
   };
 
@@ -1914,18 +2069,20 @@ export default function App() {
     const t = data.sprints[si].tasks.find(x => x.id === id); if (!t) return;
     const s = [...data.sprints];
     s[si] = { ...s[si], tasks: s[si].tasks.filter(x => x.id !== id) };
-    haptic([10, 30, 10]);
-    u({ sprints: s, archiveTasks: [{ ...t, archivedAt: now() }, ...data.archiveTasks] });
+    hapticSuccess();
+    /* View Transition — row morphs out smoothly instead of instant vanish.
+       viewTransitionName на row'е задаётся dynamically. */
+    withTransition(() => u({ sprints: s, archiveTasks: [{ ...t, archivedAt: now() }, ...data.archiveTasks] }));
   };
   const softArchiveSprint = (si) => {
     const sp = data.sprints[si];
-    haptic([10, 30, 10]);
-    u({ sprints: data.sprints.filter((_, i) => i !== si), archiveSprints: [{ ...sp, archivedAt: now() }, ...data.archiveSprints] });
+    hapticSuccess();
+    withTransition(() => u({ sprints: data.sprints.filter((_, i) => i !== si), archiveSprints: [{ ...sp, archivedAt: now() }, ...data.archiveSprints] }));
   };
   const softArchiveEpic = (id) => {
     const e = data.epics.find(x => x.id === id); if (!e) return;
-    haptic([10, 30, 10]);
-    u({ epics: data.epics.filter(x => x.id !== id), archiveEpics: [{ ...e, archivedAt: now() }, ...data.archiveEpics] });
+    hapticSuccess();
+    withTransition(() => u({ epics: data.epics.filter(x => x.id !== id), archiveEpics: [{ ...e, archivedAt: now() }, ...data.archiveEpics] }));
   };
 
   const restoreTask = idx => {
@@ -2057,13 +2214,13 @@ export default function App() {
 
       {/* Floating utility cluster — fixed top-right.
          Undo (влево), потом lang + theme (preferences).
-         Лёгкий haptic(5) на каждом toggle — subtle acknowledgement, native feel. */}
+         hapticLight на каждом toggle — subtle acknowledgement. */}
       <UtilityCluster lang={lang} theme={theme} t={t} canUndo={canUndo} onUndo={doUndo}
         sort={data.sort}
-        onToggleSort={() => { haptic(5); withTransition(() => uPref({ sort: data.sort === "desc" ? "asc" : "desc" })); }}
-        onToggleLang={() => { haptic(5); uPref({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } }); }}
+        onToggleSort={() => { hapticLight(); withTransition(() => uPref({ sort: data.sort === "desc" ? "asc" : "desc" })); }}
+        onToggleLang={() => { hapticLight(); uPref({ ui: { ...data.ui, lang: lang === "ru" ? "en" : "ru" } }); }}
         onToggleTheme={() => {
-          haptic(5);
+          hapticLight();
           const eff = theme || "light";
           uPref({ ui: { ...data.ui, theme: eff === "dark" ? "light" : "dark" } });
         }}
@@ -2086,14 +2243,14 @@ export default function App() {
 
       {/* Epics */}
       <div style={SEC}>
-        <div className="section-header">
+        <StickyHeader>
           <span style={H}>{t("epics")}</span>
           <button onClick={() => {
             const ne = mkEpic(inheritedProject);
             u({ epics: [ne, ...data.epics] });
             openEpic(ne);
           }} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
-        </div>
+        </StickyHeader>
         {visibleEpics.map(e => {
           const cnt = allTasks.filter(tk => tk.epicId === e.id).length;
           const pr = data.projects.find(p => p.id === e.projectId);
@@ -2119,10 +2276,10 @@ export default function App() {
           когда user скроллит past Спринты, sticky уходит естественно. Без
           wrapper'а sticky dragged бы до конца контейнера. */}
       <div style={SEC}>
-        <div className="section-header">
+        <StickyHeader>
           <span style={H}>{t("sprints")}</span>
           <button onClick={() => setShowNewSprint(v => !v)} className="icon-btn" style={{ ...B, color: "var(--fg-2)", fontSize: 14, marginLeft: 6 }}>+</button>
-        </div>
+        </StickyHeader>
 
       {/* Inline sprint creation form */}
       {showNewSprint && (
@@ -2142,7 +2299,8 @@ export default function App() {
         const doneCount = tasks.filter(tk => tk.done).length;
         const total = tasks.length;
         return (
-          <div key={sp.id} className="row" data-sprint-id={sp.id} style={SPRINT_CARD}>
+          <div key={sp.id} className="row" data-sprint-id={sp.id}
+            style={{ ...SPRINT_CARD, viewTransitionName: `sprint-${sp.id}` }}>
             {/* Header: name truncates при необходимости, progress + actions всегда
                 на одной строке справа. Раньше flexWrap:wrap вёл к тому, что
                 длинное имя ("Следующая неделя") съедало место, OverflowMenu
@@ -2157,6 +2315,7 @@ export default function App() {
               </div>
               <SprintHeaderActions
                 narrow={narrow} t={t} addTaskLabel={t("addTask")}
+                title={sp.name || t("sprint")}
                 onAddTask={() => {
                   // Prepend + auto-open modal (P2.3 flow):
                   // создаём draft-задачу вверху спринта и сразу открываем карточку
@@ -2222,6 +2381,32 @@ export default function App() {
 
       </div>
     </div>
+  );
+}
+
+/* ── Sticky section-header с drop-shadow когда контент скроллится под ним.
+   Sentinel zero-height div ставится ПЕРЕД sticky header'ом. Когда sentinel
+   уходит за viewport'а (user scrolled past section-top), header становится
+   stuck → shadow. IntersectionObserver дёшевле scroll-listener'а, не
+   блокирует main thread. rootMargin учитывает env(safe-area-inset-top). */
+function StickyHeader({ children }) {
+  const sentinelRef = useRef(null);
+  const headerRef = useRef(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const header = headerRef.current;
+    if (!sentinel || !header || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([entry]) => {
+      header.setAttribute("data-stuck", entry.isIntersecting ? "false" : "true");
+    }, { threshold: [0] });
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, []);
+  return (
+    <>
+      <div ref={sentinelRef} aria-hidden="true" style={{ height: 1, marginTop: -1 }} />
+      <div ref={headerRef} className="section-header">{children}</div>
+    </>
   );
 }
 
